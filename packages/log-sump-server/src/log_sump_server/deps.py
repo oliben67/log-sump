@@ -26,6 +26,7 @@ from log_sump_common.config import Settings
 from redis.asyncio import Redis
 
 from .buffers import BufferManager
+from .events import EventManager
 from .scheduling import Scheduler
 from .sessions import SessionManager
 
@@ -103,3 +104,8 @@ def get_buffer_manager(request: Request) -> BufferManager:
 def get_scheduler(request: Request) -> Scheduler:
     scheduler: Scheduler = request.app.state.scheduler
     return scheduler
+
+
+def get_event_manager(request: Request) -> EventManager:
+    manager: EventManager = request.app.state.events
+    return manager

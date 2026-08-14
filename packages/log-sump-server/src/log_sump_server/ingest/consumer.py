@@ -22,14 +22,16 @@ no benefit to a wider field layout for a reader that never existed.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 
 import structlog
 from log_sump_common.redis_keys import INGEST_LIST
-from log_sump_common.schema import RecordAdapter
+from log_sump_common.schema import LogRecord, RecordAdapter
 from pydantic import ValidationError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from ..transforms import TransformFn, apply_transforms
 from .write import queue_record
 
 logger = structlog.get_logger(__name__)
@@ -49,16 +51,35 @@ async def run_consumer(
     *,
     poll_timeout_s: float = POLL_TIMEOUT_S,
     batch_size: int = BATCH_SIZE,
+    transform_fns: Sequence[tuple[str, TransformFn]] = (),
 ) -> None:
+    """`transform_fns` (migration plan Phase 5, `transforms.py`), if given,
+    is applied to every incoming `LogRecord` immediately before this
+    consumer's own validate-then-`XADD` step -- see `transforms.
+    apply_transforms`'s docstring. Never applied to `MetricRecord`/
+    `ServiceRecord`, matching cttc's own transform system (`LogSource`
+    only, never `StatsSource`).
+    """
     while True:
         try:
-            await _consume_once(redis, poll_timeout_s=poll_timeout_s, batch_size=batch_size)
+            await _consume_once(
+                redis,
+                poll_timeout_s=poll_timeout_s,
+                batch_size=batch_size,
+                transform_fns=transform_fns,
+            )
         except RedisError as exc:
             await logger.awarning("consumer.cycle_failed", error=str(exc))
             await asyncio.sleep(ERROR_BACKOFF_S)
 
 
-async def _consume_once(redis: Redis, *, poll_timeout_s: float, batch_size: int) -> None:
+async def _consume_once(
+    redis: Redis,
+    *,
+    poll_timeout_s: float,
+    batch_size: int,
+    transform_fns: Sequence[tuple[str, TransformFn]] = (),
+) -> None:
     popped = await redis.blpop([INGEST_LIST], timeout=poll_timeout_s)
     if popped is None:
         return  # nothing arrived within the poll window -- loop and wait again
@@ -70,10 +91,15 @@ async def _consume_once(redis: Redis, *, poll_timeout_s: float, batch_size: int)
         rest = await redis.lpop(INGEST_LIST, batch_size - 1)
         if rest:
             batch.extend(rest)
-    await _ingest_batch(redis, batch)
+    await _ingest_batch(redis, batch, transform_fns=transform_fns)
 
 
-async def _ingest_batch(redis: Redis, batch: list[bytes | str | int]) -> None:
+async def _ingest_batch(
+    redis: Redis,
+    batch: list[bytes | str | int],
+    *,
+    transform_fns: Sequence[tuple[str, TransformFn]] = (),
+) -> None:
     pipe = redis.pipeline(transaction=False)
     queued = 0
     for raw in batch:
@@ -86,6 +112,11 @@ async def _ingest_batch(redis: Redis, batch: list[bytes | str | int]) -> None:
             record = RecordAdapter.validate_json(raw)
         except ValidationError as exc:
             await logger.awarning("consumer.malformed_record", error=str(exc))
+            continue
+        if transform_fns and isinstance(record, LogRecord):
+            for transformed in apply_transforms(record, list(transform_fns)):
+                queue_record(pipe, transformed)
+                queued += 1
             continue
         queue_record(pipe, record)
         queued += 1

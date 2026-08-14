@@ -99,6 +99,25 @@ class ServerConfig(BaseModel):
     #: happens when a session/buffer's window is actually exported, not on
     #: every tick.
     tick_interval_seconds: float = 5.0
+    #: Same cadence, for events.py's condition checks (Phase 5) -- kept as
+    #: its own setting since it's a genuinely different cost profile (a
+    #: real Redis XRANGE per condition per tick, not an in-memory sweep).
+    events_tick_interval_seconds: float = 5.0
+
+
+class TransformsConfig(BaseModel):
+    """User transform plugins (migration plan Phase 5) -- log-only,
+    matching cttc's own `TransformRegistry`. `directory` unset (the
+    default) disables transforms entirely: no directory to scan, nothing
+    applied.
+    """
+
+    directory: str | None = None
+    #: Names loaded and applied, in order, to every live-collected
+    #: LogRecord (see ingest/consumer.py). Unlike cttc (which selects
+    #: transforms per opened source), this is a single global list --
+    #: per-daemon selection is a documented simplification for this pass.
+    active: list[str] = Field(default_factory=list)
 
 
 class Settings(BaseSettings):
@@ -109,6 +128,7 @@ class Settings(BaseSettings):
     logstash: LogstashConfig = Field(default_factory=LogstashConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    transforms: TransformsConfig = Field(default_factory=TransformsConfig)
 
     model_config = SettingsConfigDict(
         env_prefix="LOG_SUMP_",

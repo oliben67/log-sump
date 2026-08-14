@@ -9,7 +9,11 @@ just `{docker_host, start_ts, minutes, paused_at}`.
 Retention: an ad-hoc buffer (`start()`) left running longer than
 `MAX_AGE_SECONDS` with no `stop()`/`pause()` (a bug, a crash, or just
 forgetting) is reclaimed by `tick()`, and `start()` itself caps how many
-can be open at once -- matches cttc's own `br-RBUF-005` fix.
+can be open at once -- matches cttc's own `br-RBUF-005` fix. Neither
+applies to a buffer `events.py` (Phase 5) keeps alive for an enabled
+event's entire lifetime (`owned_by_event=True`) -- that lifetime is
+bounded by the event itself (`cancel()`/`update()` always `stop()` it
+first), not by age or count.
 """
 
 from __future__ import annotations
@@ -40,16 +44,24 @@ class BufferManager:
         self._buffers: dict[str, dict] = {}
         self._next_id = 1
 
-    def start(self, docker_host: str, minutes: float) -> str:
+    def start(self, docker_host: str, minutes: float, *, owned_by_event: bool = False) -> str:
         """Start a new buffer covering the last `minutes` minutes of
         `docker_host`, starting from now. Returns the new buffer's id.
+        `events.py` passes `owned_by_event=True` to keep this buffer alive
+        for its whole lifetime, exempt from the ad-hoc cap/TTL below (how
+        many of those exist is already bounded by how many snapshot-action
+        events exist).
 
-        Raises `TooManyBuffers` if `MAX_OPEN` buffers are already open.
+        Raises `TooManyBuffers` if `MAX_OPEN` ad-hoc buffers are already
+        open.
         """
-        if len(self._buffers) >= MAX_OPEN:
-            raise TooManyBuffers(
-                f"{MAX_OPEN} rolling buffers are already open -- stop some before starting another"
-            )
+        if not owned_by_event:
+            open_ad_hoc = sum(1 for buf in self._buffers.values() if not buf["owned_by_event"])
+            if open_ad_hoc >= MAX_OPEN:
+                raise TooManyBuffers(
+                    f"{MAX_OPEN} rolling buffers are already open -- "
+                    "stop some before starting another"
+                )
         buffer_id = f"b{self._next_id}"
         self._next_id += 1
         self._buffers[buffer_id] = {
@@ -57,18 +69,21 @@ class BufferManager:
             "start_ts": time.time() * 1000.0,
             "minutes": minutes,
             "paused_at": None,
+            "owned_by_event": owned_by_event,
         }
         return buffer_id
 
     def tick(self, now: float | None = None) -> list[str]:
-        """Sweeps buffers open longer than `MAX_AGE_SECONDS` with no
-        `stop()`. Returns the ids reclaimed.
+        """Sweeps ad-hoc buffers open longer than `MAX_AGE_SECONDS` with no
+        `stop()`. Never touches an `owned_by_event` buffer, meant to live
+        as long as its event stays enabled, however long that is. Returns
+        the ids reclaimed.
         """
         now = now if now is not None else time.time() * 1000.0
         expired = [
             bid
             for bid, buf in self._buffers.items()
-            if now - buf["start_ts"] > MAX_AGE_SECONDS * 1000.0
+            if not buf["owned_by_event"] and now - buf["start_ts"] > MAX_AGE_SECONDS * 1000.0
         ]
         for bid in expired:
             del self._buffers[bid]

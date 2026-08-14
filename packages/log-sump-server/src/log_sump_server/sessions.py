@@ -100,6 +100,37 @@ class SessionManager:
         )
         return sid
 
+    async def store_precomputed(
+        self, data: bytes, *, safe: bool = False, max_keep_seconds: float | None = None
+    ) -> str:
+        """Register already-built archive bytes as a completed "session" --
+        for `events.py` (Phase 5), whose triggered snapshots come from a
+        rolling buffer's own `snapshot()` slice rather than from a session
+        that ran on this manager's own clock. Gets the same id space,
+        `download()`/`status_of()` access, and TTL handling as an ordinary
+        session. Unlike cttc's own synchronous version (which just writes a
+        local file), this is `async`: storing into Redis needs it.
+        """
+        sid = f"rec{self._next_id}"
+        self._next_id += 1
+        now = time.time() * 1000.0
+        ttl_seconds = (
+            max_keep_seconds if safe and max_keep_seconds is not None else self.default_ttl_seconds
+        )
+        await self._redis.set(session_data_key(sid), data, ex=max(1, int(ttl_seconds)))
+        self._sessions[sid] = RecordingSession(
+            id=sid,
+            docker_host="",  # meaningless here, matches cttc's own empty source_ids placeholder
+            start_ts=now,
+            duration_minutes=None,
+            safe=safe,
+            max_keep_seconds=max_keep_seconds,
+            status="completed",
+            end_ts=now,
+            stored_ts=now,
+        )
+        return sid
+
     def mark_safe(self, session_id: str, max_keep_seconds: float) -> None:
         """Flag a running or already-completed session as exempt from the
         default TTL sweep, kept instead for up to `max_keep_seconds` from

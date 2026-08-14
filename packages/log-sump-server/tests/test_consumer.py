@@ -4,7 +4,7 @@ import json
 
 from fakeredis import FakeAsyncRedis
 from log_sump_common.redis_keys import INGEST_LIST, stream_key
-from log_sump_common.schema import Kind, RecordAdapter
+from log_sump_common.schema import Kind, LogRecord, RecordAdapter
 from log_sump_server.ingest.consumer import run_consumer
 
 LOG_RECORD_JSON = json.dumps(
@@ -108,3 +108,28 @@ async def test_consumer_uses_auto_generated_stream_ids() -> None:
     stream_id = streams[stream_key("daemon-a", Kind.LOG)][0][0]
     # Redis auto IDs look like "<ms>-<seq>", not the record's own `ts`/`seq`.
     assert b"-" in stream_id
+
+
+async def test_consumer_applies_transform_fns_to_log_records_only() -> None:
+    def uppercase(record: dict) -> dict:
+        record = dict(record)
+        record["message"] = record["message"].upper()
+        return record
+
+    redis = FakeAsyncRedis()
+    await redis.rpush(INGEST_LIST, LOG_RECORD_JSON, METRIC_RECORD_JSON)
+
+    streams = await _consume_and_capture(
+        redis,
+        [stream_key("daemon-a", Kind.LOG), stream_key("daemon-a", Kind.METRIC)],
+        poll_timeout_s=0.05,
+        transform_fns=[("uppercase", uppercase)],
+    )
+
+    log_fields = streams[stream_key("daemon-a", Kind.LOG)][0][1]
+    assert log_fields is not None
+    log_record = RecordAdapter.validate_json(log_fields[b"data"])
+    assert isinstance(log_record, LogRecord)
+    assert log_record.message == "HELLO"  # transformed
+    metric_entries = streams[stream_key("daemon-a", Kind.METRIC)]
+    assert len(metric_entries) == 1  # untouched -- transforms are log-only, matching cttc
