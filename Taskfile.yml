@@ -58,7 +58,9 @@ tasks:
       - "{{.COMPOSE_DEV}} down -v"
 
   run:listener:
-    desc: Run log-sump-listener directly on the host (expects LOG_SUMP_CONFIG set)
+    desc: Run log-sump-listener directly on the host (defaults to dev/config.dev.yaml; override with LOG_SUMP_CONFIG_FILE)
+    env:
+      LOG_SUMP_CONFIG_FILE: '{{.LOG_SUMP_CONFIG_FILE | default "dev/config.dev.yaml"}}'
     cmds:
       - uv run --package log-sump-listener python -m log_sump_listener
 
