@@ -33,6 +33,15 @@ def daemon_status_key(docker_host: str) -> str:
     return f"{_PREFIX}:daemon:{docker_host}:status"
 
 
+def daemons_key() -> str:
+    """Hash of daemon_id -> JSON-encoded `DaemonConfig`, for daemons
+    registered at runtime (migration plan Phase 3) -- YAML's `daemons:`
+    list seeds the boot-time set; this hash holds what's been added/
+    removed via the admin API since. See `log_sump_common.daemon_registry`.
+    """
+    return f"{_PREFIX}:daemons"
+
+
 def auth_key(api_key: str) -> str:
     """Set of permitted `docker_host` values for a given API key.
 

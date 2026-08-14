@@ -477,6 +477,7 @@ source = { editable = "packages/log-sump-listener" }
 dependencies = [
     { name = "log-sump-common" },
     { name = "python-logstash-async" },
+    { name = "redis" },
     { name = "structlog" },
 ]
 
@@ -484,6 +485,7 @@ dependencies = [
 requires-dist = [
     { name = "log-sump-common", editable = "packages/log-sump-common" },
     { name = "python-logstash-async", specifier = ">=2.7" },
+    { name = "redis", specifier = ">=5.2" },
     { name = "structlog", specifier = ">=24.4" },
 ]
 

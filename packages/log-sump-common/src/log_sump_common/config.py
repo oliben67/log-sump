@@ -42,6 +42,12 @@ class ListenerConfig(BaseModel):
     #: Falls back to `stats_interval_s` when unset — see `effective_system_stats_interval_s`.
     system_stats_interval_s: float | None = None
     max_concurrent_listener_spawns: int = 10
+    #: How often the runtime daemon registry (migration plan Phase 3,
+    #: `daemon_registry.py`) is polled for additions/removals made via the
+    #: admin API. Its own setting, not reused from listing_interval_s --
+    #: adding a daemon isn't as latency-sensitive as discovering a new
+    #: container on an already-watched one.
+    daemon_registry_poll_interval_s: float = 5.0
 
     def effective_system_stats_interval_s(self) -> float:
         return self.system_stats_interval_s or self.stats_interval_s

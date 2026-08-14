@@ -21,7 +21,10 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 from log_sump_common.config import DaemonConfig, Settings
+from log_sump_common.daemon_registry import list_registered_daemons
 from log_sump_common.transport import LocalTransport, SSHTransport, Transport
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from .container_listener import run_container_listener
 from .container_stats import run_container_stats
@@ -194,34 +197,131 @@ def _build_new_container_dispatcher(
     return on_new_container
 
 
-async def run(settings: Settings, records_logger: RecordsLogger) -> None:
-    enabled = settings.enabled_daemons()
-    if not enabled:
+class DaemonManager:
+    """Owns the real per-daemon `run_daemon` asyncio.Tasks (migration plan
+    Phase 3) -- the exact `ListenerManager.spawn`/`stop` pattern above,
+    applied one level up: a daemon can now be added/removed at runtime the
+    same way a container already could. `listeners_by_daemon` grows as
+    daemons are spawned; `_build_new_container_dispatcher` already looks
+    its target up by key at call time (not once at construction), so
+    reusing it here needs no changes for that dynamic growth to work.
+    """
+
+    def __init__(self, settings: Settings, records_logger: RecordsLogger) -> None:
+        self._settings = settings
+        self._records_logger = records_logger
+        self._registry = Registry()
+        self._spawn_semaphore = asyncio.Semaphore(settings.listener.max_concurrent_listener_spawns)
+        self._listeners_by_daemon: dict[str, ListenerManager] = {}
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._registry.on_new_container(
+            _build_new_container_dispatcher(self._listeners_by_daemon)
+        )
+
+    def active_daemon_ids(self) -> set[str]:
+        return set(self._tasks)
+
+    async def spawn(self, daemon: DaemonConfig) -> None:
+        if daemon.id in self._tasks:
+            return
+        transport = build_transport(daemon)
+        listeners = ListenerManager(
+            daemon.id, transport, self._records_logger, self._spawn_semaphore
+        )
+        self._listeners_by_daemon[daemon.id] = listeners
+        coro = run_daemon(
+            daemon, self._settings, self._registry, transport, listeners, self._records_logger
+        )
+        task = asyncio.create_task(coro, name=f"daemon:{daemon.id}")
+        self._tasks[daemon.id] = task
+        task.add_done_callback(self._make_done_callback(daemon.id))
+        await logger.ainfo("daemon_manager.spawned", docker_host=daemon.id)
+
+    def _make_done_callback(self, daemon_id: str) -> Callable[[asyncio.Task[None]], None]:
+        def on_done(task: asyncio.Task[None]) -> None:
+            # A daemon's whole task tree can end on its own (every one of
+            # its subtasks failing) as well as via stop() below -- either
+            # way, drop our bookkeeping so a future registry re-add can
+            # respawn it, matching ListenerManager's own done-callback.
+            if self._tasks.get(daemon_id) is task:
+                del self._tasks[daemon_id]
+            self._listeners_by_daemon.pop(daemon_id, None)
+            if not task.cancelled() and (exc := task.exception()) is not None:
+                logger.error("daemon_manager.crashed", docker_host=daemon_id, error=str(exc))
+
+        return on_done
+
+    async def stop(self, daemon_id: str) -> None:
+        task = self._tasks.pop(daemon_id, None)
+        self._listeners_by_daemon.pop(daemon_id, None)
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def run_daemon_registry_watch(
+    redis: Redis,
+    manager: DaemonManager,
+    yaml_daemon_ids: frozenset[str],
+    *,
+    poll_interval_s: float,
+) -> None:
+    """Polls the runtime daemon registry (migration plan Phase 3,
+    `daemon_registry.py`) and reconciles it against `manager`'s currently
+    running daemons: spawns anything newly registered, stops anything
+    that's been removed. Never touches a daemon in `yaml_daemon_ids` --
+    those are config's own responsibility (a restart, not this loop, is
+    what removes one), even if it's absent from the registry (it was never
+    supposed to be there in the first place).
+    """
+    while True:
+        try:
+            registered = await list_registered_daemons(redis)
+        except RedisError as exc:
+            await logger.awarning("daemon_registry_watch.poll_failed", error=str(exc))
+        else:
+            registered_by_id = {d.id: d for d in registered if d.enabled}
+            for daemon_id, daemon in registered_by_id.items():
+                if daemon_id not in manager.active_daemon_ids():
+                    await manager.spawn(daemon)
+            removable = manager.active_daemon_ids() - yaml_daemon_ids - set(registered_by_id)
+            for daemon_id in removable:
+                await manager.stop(daemon_id)
+        await asyncio.sleep(poll_interval_s)
+
+
+async def run(
+    settings: Settings, records_logger: RecordsLogger, redis: Redis | None = None
+) -> None:
+    """Wires every configured/registered daemon to its own `DaemonManager`-
+    owned task and then blocks until cancelled (SIGTERM/SIGINT, via
+    `__main__.py`). Daemon tasks are fire-and-forget background tasks
+    (`DaemonManager.spawn`), not something this coroutine awaits directly
+    -- unlike the pre-Phase-3 version, daemons can now be added after this
+    call has already started.
+
+    `redis`, if given, enables the runtime daemon registry watch (Phase 3);
+    omitted (e.g. in a test that only cares about the YAML-configured set),
+    this behaves like the static, boot-time-only version always did.
+    """
+    manager = DaemonManager(settings, records_logger)
+    yaml_daemon_ids = frozenset(daemon.id for daemon in settings.enabled_daemons())
+    for daemon in settings.enabled_daemons():
+        await manager.spawn(daemon)
+    if not yaml_daemon_ids and redis is None:
         await logger.awarning("app.no_enabled_daemons")
-        return
 
-    registry = Registry()
-    spawn_semaphore = asyncio.Semaphore(settings.listener.max_concurrent_listener_spawns)
-    transports_by_daemon = {daemon.id: build_transport(daemon) for daemon in enabled}
-    listeners_by_daemon = {
-        daemon.id: ListenerManager(
-            daemon.id, transports_by_daemon[daemon.id], records_logger, spawn_semaphore
+    await logger.ainfo("app.starting", daemon_ids=sorted(yaml_daemon_ids))
+    if redis is None:
+        await asyncio.Event().wait()
+    else:
+        await run_daemon_registry_watch(
+            redis,
+            manager,
+            yaml_daemon_ids,
+            poll_interval_s=settings.listener.daemon_registry_poll_interval_s,
         )
-        for daemon in enabled
-    }
-    registry.on_new_container(_build_new_container_dispatcher(listeners_by_daemon))
-
-    await logger.ainfo("app.starting", daemon_ids=list(listeners_by_daemon))
-    await asyncio.gather(
-        *(
-            run_daemon(
-                daemon,
-                settings,
-                registry,
-                transports_by_daemon[daemon.id],
-                listeners_by_daemon[daemon.id],
-                records_logger,
-            )
-            for daemon in enabled
-        )
-    )

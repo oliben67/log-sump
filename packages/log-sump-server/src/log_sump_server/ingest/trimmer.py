@@ -25,6 +25,7 @@ import time
 from collections.abc import Sequence
 
 import structlog
+from log_sump_common.daemon_registry import list_registered_daemons
 from log_sump_common.redis_keys import stream_key
 from log_sump_common.schema import Kind
 from redis.asyncio import Redis
@@ -43,10 +44,23 @@ async def run_trimmer(
     metrics_retention_days: int,
     trim_interval_seconds: float,
 ) -> None:
+    """`daemon_ids` is the YAML-configured baseline; a daemon registered at
+    runtime since (migration plan Phase 3, `POST /daemons`) is re-read from
+    the registry every cycle here rather than once at startup -- this
+    background task already lives in log-server, which has unscoped Redis
+    access to begin with, so merging the two on each tick costs nothing
+    architecturally, unlike the listener side's own "how does it even find
+    out" problem (see `daemon_registry.py`'s module docstring).
+    """
     while True:
+        current_ids = set(daemon_ids)
+        try:
+            current_ids.update(daemon.id for daemon in await list_registered_daemons(redis))
+        except RedisError as exc:
+            await logger.awarning("trimmer.registry_poll_failed", error=str(exc))
         await _trim_once(
             redis,
-            daemon_ids,
+            sorted(current_ids),
             retention_days=retention_days,
             metrics_retention_days=metrics_retention_days,
         )

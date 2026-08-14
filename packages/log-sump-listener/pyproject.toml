@@ -7,6 +7,7 @@ dependencies = [
     "log-sump-common",
     "structlog>=24.4",
     "python-logstash-async>=2.7",
+    "redis>=5.2",  # daemon_registry.py watch only -- see app.py's own module docstring
 ]
 
 [tool.uv.sources]
