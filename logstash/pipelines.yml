@@ -1,0 +1,2 @@
+- pipeline.id: log-sump
+  path.config: "/usr/share/logstash/pipeline/log-sump.conf"

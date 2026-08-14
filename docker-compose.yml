@@ -1,0 +1,18 @@
+services:
+  log-sump:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      LOG_SUMP_CONFIG_FILE: /config/config.yaml
+    volumes:
+      - ./config/config.yaml:/config/config.yaml:ro
+      - log-sump-data:/data
+      # Mount your SSH key/config read-only if any configured daemon uses
+      # `transport: ssh` -- e.g.:
+      # - ~/.ssh:/root/.ssh:ro
+
+volumes:
+  log-sump-data:

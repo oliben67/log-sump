@@ -1,0 +1,18 @@
+[project]
+name = "log-sump-common"
+version = "0.1.0"
+description = "Shared record schema, config loading, transport and auth interfaces for log-sump"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "redis>=5.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/log_sump_common"]

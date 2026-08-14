@@ -1,0 +1,31 @@
+# Copy this to config/config.yaml (gitignored) and edit before running
+# `task compose:up` / `docker compose up`. See log_sump_common.config for
+# every field, defaults, and the LOG_SUMP_* env var override for each.
+
+daemons:
+  - id: prod-a
+    host: 10.0.0.5
+    user: deploy
+    transport: ssh
+    # ssh_options: ["-o", "StrictHostKeyChecking=accept-new"]
+    enabled: true
+
+listener:
+  listing_interval_s: 5
+  tracker_interval_s: 10
+  missing_threshold_cycles: 3
+  stats_interval_s: 15
+
+metrics:
+  enabled: true
+  system_enabled: true
+  system_metrics_source: proc # proc | container-aggregate | none
+
+retention:
+  retention_days: 7
+  metrics_retention_days: 3
+  trim_interval_seconds: 300
+
+# logstash/redis/server sections default to the loopback addresses that
+# match this project's own single-container packaging (spec §3.2) --
+# only override them if you're running the pieces separately.

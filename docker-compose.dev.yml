@@ -1,0 +1,18 @@
+services:
+  fixture-web:
+    image: busybox:stable
+    container_name: log-sump-fixture-web
+    command: >
+      sh -c "i=0; while true; do echo \"web-$$i: hello from web\"; i=$$((i+1)); sleep 1; done"
+
+  fixture-db:
+    image: busybox:stable
+    container_name: log-sump-fixture-db
+    command: >
+      sh -c "i=0; while true; do echo \"db-$$i: hello from db\"; i=$$((i+1)); sleep 1; done"
+
+  redis:
+    image: redis:7-alpine
+    container_name: log-sump-dev-redis
+    ports:
+      - "6379:6379"

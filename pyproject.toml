@@ -1,0 +1,46 @@
+[project]
+name = "log-sump-workspace"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.27",
+    "fakeredis>=2.26",
+    "ruff>=0.7",
+    "ty>=0.0.71",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages"]
+# Each package's tests/ directory shares the basename "tests" (and each is a
+# package thanks to tests/__init__.py, so relative imports like
+# `from .conftest import ...` work within a package). The default "prepend"
+# import mode requires globally-unique top-level module names and collides
+# across packages in that setup; importlib mode identifies modules by full
+# path instead, which is what actually resolves it.
+addopts = ["--import-mode=importlib"]
+markers = [
+    "integration: exercises a real Redis via docker-compose.dev.yml (`task dev:up` first); excluded from the default `task test` run",
+]
+
+[tool.ty.environment]
+python-version = "3.12"

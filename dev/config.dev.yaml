@@ -1,0 +1,18 @@
+daemons:
+  - id: local-dev
+    host: localhost
+    transport: local
+
+listener:
+  listing_interval_s: 2
+  tracker_interval_s: 2
+  missing_threshold_cycles: 2
+  stats_interval_s: 3
+
+metrics:
+  system_metrics_source: proc
+
+logstash:
+  host: 127.0.0.1
+  port: 5959
+  database_path: dev/logstash-buffer.db

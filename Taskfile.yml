@@ -1,0 +1,83 @@
+version: "3"
+
+vars:
+  COMPOSE_DEV: docker compose -f docker-compose.dev.yml
+  COMPOSE: docker compose -f docker-compose.yml
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  sync:
+    desc: Install/sync the uv workspace (all packages + dev dependency group)
+    cmds:
+      - uv sync --all-packages --group dev
+
+  lint:
+    desc: Run ruff lint checks across the workspace
+    cmds:
+      - uv run ruff check .
+
+  fmt:
+    desc: Format the workspace with ruff
+    cmds:
+      - uv run ruff format .
+
+  typecheck:
+    desc: Run ty across the workspace
+    cmds:
+      - uv run ty check packages
+
+  test:
+    desc: Run the full pytest suite (unit tests only, no Docker required)
+    cmds:
+      - uv run pytest
+
+  test:integration:
+    desc: Run integration tests against dev fixtures (requires `task dev:up` first)
+    cmds:
+      - uv run pytest tests/integration -m integration
+
+  check:
+    desc: Lint, typecheck, and test in one shot
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
+
+  dev:up:
+    desc: Start throwaway fixture containers + standalone redis for local dev
+    cmds:
+      - "{{.COMPOSE_DEV}} up -d"
+
+  dev:down:
+    desc: Tear down dev fixtures
+    cmds:
+      - "{{.COMPOSE_DEV}} down -v"
+
+  run:listener:
+    desc: Run log-sump-listener directly on the host (expects LOG_SUMP_CONFIG set)
+    cmds:
+      - uv run --package log-sump-listener python -m log_sump_listener
+
+  run:server:
+    desc: Run log-sump-server directly on the host with autoreload
+    cmds:
+      - uv run --package log-sump-server uvicorn log_sump_server.app:app --reload
+
+  docker:build:
+    desc: Build the single-container product image
+    cmds:
+      - docker build -f docker/Dockerfile -t log-sump:local .
+
+  compose:up:
+    desc: Build and run the product image via docker-compose.yml
+    cmds:
+      - "{{.COMPOSE}} up --build"
+
+  compose:down:
+    desc: Tear down the product container
+    cmds:
+      - "{{.COMPOSE}} down"
