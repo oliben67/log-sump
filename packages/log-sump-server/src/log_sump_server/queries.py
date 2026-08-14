@@ -24,10 +24,10 @@ hard requirement here.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from log_sump_common.redis_keys import stream_key
-from log_sump_common.schema import Kind, LogRecord, MetricRecord, RecordAdapter
+from log_sump_common.schema import Kind, LogRecord, MetricRecord, RecordAdapter, ServiceRecord
 from pydantic import ValidationError
 from redis.asyncio import Redis
 
@@ -88,9 +88,14 @@ def _decode(value: bytes | str) -> str:
 
 def _decode_entry(fields: dict | None) -> LogRecord | MetricRecord | None:
     """One `XRANGE`/`XREVRANGE` entry's `{"data": <json>}` fields -> a
-    validated Record, or `None` for a hole. Shared by every reader below
-    (and `fetch_kind_page` above) so "lenient on read, already validated
-    once by the consumer" is enforced in exactly one place.
+    validated log/metric Record, or `None` for a hole. Shared by every
+    log/metric reader below (and `fetch_kind_page` above) so "lenient on
+    read, already validated once by the consumer" is enforced in exactly
+    one place. A stray `ServiceRecord` can't actually reach here in
+    practice (it only ever lands in its own `:service` stream, which none
+    of these readers query) -- filtered out defensively so this helper's
+    return type stays true to what its callers expect; see `_decode_service`
+    for the `:service` stream's own equivalent.
     """
     if fields is None:
         return None
@@ -98,9 +103,24 @@ def _decode_entry(fields: dict | None) -> LogRecord | MetricRecord | None:
     if data is None:
         return None
     try:
-        return RecordAdapter.validate_json(data)
+        record = RecordAdapter.validate_json(data)
     except ValidationError:
         return None
+    return record if isinstance(record, LogRecord | MetricRecord) else None
+
+
+def _decode_service(fields: dict | None) -> ServiceRecord | None:
+    """`_decode_entry`'s counterpart for the `:service` stream."""
+    if fields is None:
+        return None
+    data = fields.get(b"data")
+    if data is None:
+        return None
+    try:
+        record = RecordAdapter.validate_json(data)
+    except ValidationError:
+        return None
+    return record if isinstance(record, ServiceRecord) else None
 
 
 def _ts_ms(entry_id: bytes | str) -> int:
@@ -121,31 +141,55 @@ def _ts_ms(entry_id: bytes | str) -> int:
 _NEAREST_WINDOW = 200
 
 
+def _metric_group(container_name: str) -> tuple[str, bool]:
+    """`(group_key, is_service)` for one metric sample's display grouping —
+    cttc's `StatsSource` groups by service name (`name.split(".")[0]`),
+    merging every swarm task instance's samples into one per-service
+    timeline (a swarm task's container name has the dotted
+    `<service>.<task>.<id>` shape). A name with no dot is already its own
+    group, unchanged (an ordinary, non-swarm container).
+    """
+    group = container_name.split(".", 1)[0]
+    return (group, True) if group != container_name else (container_name, False)
+
+
 async def point_at(
     redis: Redis, docker_host: str, kind: Kind, t: datetime, *, window: int = _NEAREST_WINDOW
-) -> dict[str, tuple[str, LogRecord | MetricRecord]]:
-    """Per `container_id`, the entry whose Stream ID timestamp is closest to
+) -> dict[str, tuple[str, LogRecord | MetricRecord, bool]]:
+    """Per display group, the entry whose Stream ID timestamp is closest to
     `t` — cttc's `/point`: compare an arbitrary instant (e.g. a loaded
-    sample) against another (e.g. live "now"), across every container
-    visible on this daemon at once, not scoped to a single one.
+    sample) against another (e.g. live "now"), across every container/
+    service visible on this daemon at once, not scoped to a single one.
+
+    `MetricRecord`s are grouped by `_metric_group` (service-merged, matching
+    cttc's `StatsSource.point_at`); any other kind falls back to grouping by
+    `container_id` (unaffected — cttc's `LogSource` never merges by
+    service). The `bool` in each result is that group's `is_service` flag.
     """
     target_ms = int(t.timestamp() * 1000)
     stream = stream_key(docker_host, kind)
     before = await redis.xrevrange(stream, max=_id_ceiling(t), count=window) or []
     after = await redis.xrange(stream, min=f"({_id_ceiling(t)}", count=window) or []
 
-    best: dict[str, tuple[str, LogRecord | MetricRecord, int]] = {}
+    best: dict[str, tuple[str, LogRecord | MetricRecord, int, bool]] = {}
     for entry_id, fields in (*before, *after):
         if entry_id is None:
             continue
         record = _decode_entry(fields)
         if record is None:
             continue
+        if isinstance(record, MetricRecord):
+            group, is_service = _metric_group(record.container_name)
+        else:
+            group, is_service = record.container_id, False
         distance = abs(_ts_ms(entry_id) - target_ms)
-        current = best.get(record.container_id)
+        current = best.get(group)
         if current is None or distance < current[2]:
-            best[record.container_id] = (_decode(entry_id), record, distance)
-    return {cid: (entry_id, record) for cid, (entry_id, record, _distance) in best.items()}
+            best[group] = (_decode(entry_id), record, distance, is_service)
+    return {
+        group: (entry_id, record, is_service)
+        for group, (entry_id, record, _distance, is_service) in best.items()
+    }
 
 
 async def index_at(
@@ -222,26 +266,46 @@ async def ticks(
 
 
 class BucketedContainer(TypedDict):
-    container_id: str
     name: str
+    ttype: Literal["service", "container"]
     cpu: list[float | None]
     mem: list[float | None]
     net: list[float | None]
 
 
+def _max_series(a: list[float | None], b: list[float | None]) -> list[float | None]:
+    """Element-wise max of two equal-length per-pixel series, `None` skipped
+    like every other max-merge here.
+    """
+    out: list[float | None] = []
+    for x, y in zip(a, b, strict=True):
+        if x is None:
+            out.append(y)
+        elif y is None:
+            out.append(x)
+        else:
+            out.append(max(x, y))
+    return out
+
+
 async def bucketed(
     redis: Redis, docker_host: str, t0: datetime, t1: datetime, px: int
 ) -> list[BucketedContainer]:
-    """Per container, per pixel bucket: max `cpu_pct`, max `mem_pct`, max
-    net bytes/sec — cttc's `StatsSource.bucketed` (backs `/series`).
+    """Per display group, per pixel bucket: max `cpu_pct`, max `mem_pct`,
+    max net bytes/sec — cttc's `StatsSource.bucketed` (backs `/series`).
 
     `MetricRecord` stores net as cumulative rx+tx counters, matching
     `docker stats`' own semantics (see `architecture.md`), so the rate is
-    derived here from each container's own consecutive samples — sorted by
-    Stream ID timestamp first — before bucketing. Same two-step cttc's
-    `StatsSource._net_rate` does, just performed at query time instead of
-    ingest time (a counter decrease, e.g. a container restart, is treated
-    the same way: skipped rather than yielding a negative rate).
+    derived here from each *container's own* consecutive samples — sorted
+    by Stream ID timestamp first — before bucketing (a different
+    container's counters are unrelated, so this stays keyed by
+    `container_id`, not by display group, for that first pass). Only once
+    each container has its own cpu/mem/net-rate series does a second pass
+    merge same-service containers together via `_metric_group` +
+    `_max_series` — cttc's own per-service max-merge, just computed at
+    query time instead of ingest time (a counter decrease, e.g. a container
+    restart, is treated the same way throughout: skipped rather than
+    yielding a negative rate).
     """
     px = max(1, px)
     dt_ms = max(1.0, (t1 - t0).total_seconds() * 1000.0 / px)
@@ -259,8 +323,8 @@ async def bucketed(
             continue
         by_container.setdefault(record.container_id, []).append((_ts_ms(entry_id), record))
 
-    out: list[BucketedContainer] = []
-    for container_id, samples in by_container.items():
+    grouped: dict[str, BucketedContainer] = {}
+    for samples in by_container.values():
         samples.sort(key=lambda pair: pair[0])
         cpu: list[float | None] = [None] * px
         mem: list[float | None] = [None] * px
@@ -292,16 +356,21 @@ async def bucketed(
                             net[bucket] = rate
                 prev_total = (ts_ms, total)
 
-        out.append(
-            BucketedContainer(
-                container_id=container_id,
-                name=samples[0][1].container_name,
+        group, is_service = _metric_group(samples[0][1].container_name)
+        existing = grouped.get(group)
+        if existing is None:
+            grouped[group] = BucketedContainer(
+                name=group,
+                ttype="service" if is_service else "container",
                 cpu=cpu,
                 mem=mem,
                 net=net,
             )
-        )
-    return out
+        else:
+            existing["cpu"] = _max_series(existing["cpu"], cpu)
+            existing["mem"] = _max_series(existing["mem"], mem)
+            existing["net"] = _max_series(existing["net"], net)
+    return list(grouped.values())
 
 
 #: Bound on how many entries find_text scans per direction before giving up
@@ -409,3 +478,44 @@ def apply_filters(
         needle = q.lower()
         result = [r for r in result if needle in str(getattr(r, "message", "")).lower()]
     return result
+
+
+#: Bound on how many recent :service entries `latest_services` scans looking
+#: for its one target cycle. A cycle emits one entry per currently-listed
+#: service, so this comfortably covers even a large swarm's service count.
+_LATEST_SERVICES_WINDOW = 200
+
+
+async def latest_services(
+    redis: Redis, docker_host: str, *, window: int = _LATEST_SERVICES_WINDOW
+) -> list[ServiceRecord]:
+    """The most recent `services-listing` cycle's records for `docker_host`
+    — cttc's `docker_ps`'s "services" list (`docker service ls`), used by
+    the Set Sources picker to offer a whole swarm service, not just one
+    task/container, as a collection target.
+
+    Every service from one listing cycle ships with that cycle's own `ts`
+    (see `ServiceRecord`'s docstring), and entries come back newest-first —
+    so "the latest cycle" is just every entry, from the most recent
+    Stream ID backwards, up to (not including) the first `ts` that differs
+    from the newest one seen. Not a "current state" key: `:service` is an
+    ordinary Stream like every other kind, kept simple and consistent with
+    the migration plan's "Streams remain the sole source of truth" rule
+    rather than adding a new key shape for this one kind.
+    """
+    stream = stream_key(docker_host, Kind.SERVICE)
+    raw_entries = await redis.xrevrange(stream, count=window) or []
+    records: list[ServiceRecord] = []
+    latest_ts = None
+    for entry_id, fields in raw_entries:
+        if entry_id is None:
+            continue
+        record = _decode_service(fields)
+        if record is None:
+            continue
+        if latest_ts is None:
+            latest_ts = record.ts
+        elif record.ts != latest_ts:
+            break  # newest-first order -- a different ts means we've left the latest cycle
+        records.append(record)
+    return records

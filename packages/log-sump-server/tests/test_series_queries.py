@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from fakeredis import FakeAsyncRedis
 from log_sump_common.redis_keys import stream_key
 from log_sump_common.schema import Kind, MetricRecord
-from log_sump_server.queries import bucketed, find_text, index_at, point_at, ticks
+from log_sump_server.queries import bucketed, find_text, index_at, latest_services, point_at, ticks
 
 DOCKER_HOST = "daemon-a"
 
@@ -49,6 +49,7 @@ async def _seed_metric(
     *,
     ts: datetime,
     container_id: str,
+    container_name: str | None = None,
     cpu_pct: float | None = None,
     mem_pct: float | None = None,
     net_rx_bytes: int | None = None,
@@ -58,7 +59,7 @@ async def _seed_metric(
     fields = {
         "kind": "metric",
         "docker_host": DOCKER_HOST,
-        "container_name": f"name-{container_id}",
+        "container_name": container_name or container_id,
         "container_id": container_id,
         "ts": ts.isoformat(),
         "seq": 1,
@@ -86,13 +87,36 @@ async def test_point_at_returns_nearest_sample_per_container() -> None:
 
     result = await point_at(redis, DOCKER_HOST, Kind.METRIC, _dt(_ms(t0) + 900))
 
-    assert set(result) == {"c1", "c2"}
-    _id_c1, record_c1 = result["c1"]
+    assert set(result) == {"c1", "c2"}  # no dot in either container_name -- own group, unmerged
+    _id_c1, record_c1, is_service_c1 = result["c1"]
     assert isinstance(record_c1, MetricRecord)
     assert record_c1.cpu_pct == 10.0  # t0 (900ms away) closer than t0+5000ms
-    _id_c2, record_c2 = result["c2"]
+    assert is_service_c1 is False
+    _id_c2, record_c2, _is_service_c2 = result["c2"]
     assert isinstance(record_c2, MetricRecord)
     assert record_c2.cpu_pct == 99.0
+
+
+async def test_point_at_merges_swarm_task_instances_into_one_service() -> None:
+    redis = FakeAsyncRedis()
+    t0 = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    # Two different task instances of the same "web" service -- swarm-style
+    # dotted names -- should collapse into one "web" group.
+    await _seed_metric(redis, ts=t0, container_id="c1", container_name="web.1.aaa", cpu_pct=10.0)
+    await _seed_metric(
+        redis,
+        ts=_dt(_ms(t0) + 1000),
+        container_id="c2",
+        container_name="web.2.bbb",
+        cpu_pct=20.0,
+    )
+
+    result = await point_at(redis, DOCKER_HOST, Kind.METRIC, _dt(_ms(t0) + 900))
+
+    assert set(result) == {"web"}
+    _entry_id, record, is_service = result["web"]
+    assert is_service is True
+    assert record.container_id == "c2"  # t0+1000ms (100ms away) closer than t0's c1 (900ms away)
 
 
 async def test_index_at_finds_nearest_preceding_entry_for_container() -> None:
@@ -151,9 +175,38 @@ async def test_bucketed_computes_max_per_pixel_and_net_rate_from_counters() -> N
 
     assert len(out) == 1
     entry = out[0]
-    assert entry["container_id"] == "c1"
+    assert entry["name"] == "c1"
+    assert entry["ttype"] == "container"
     assert max(v for v in entry["cpu"] if v is not None) == 15.0
     assert max(v for v in entry["net"] if v is not None) == 1000.0
+
+
+async def test_bucketed_merges_swarm_task_instances_via_max() -> None:
+    redis = FakeAsyncRedis()
+    t0 = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    t1 = _dt(_ms(t0) + 10000)
+    # Two task instances of the same service -- each has its own counters
+    # (a different container's cumulative bytes are unrelated, so no rate
+    # is computed across them), but their cpu% should still max-merge into
+    # one "web" series.
+    await _seed_metric(
+        redis, ts=t0, container_id="c1", container_name="web.1.aaa", cpu_pct=10.0
+    )
+    await _seed_metric(
+        redis,
+        ts=_dt(_ms(t0) + 1000),
+        container_id="c2",
+        container_name="web.2.bbb",
+        cpu_pct=30.0,
+    )
+
+    out = await bucketed(redis, DOCKER_HOST, t0, t1, px=10)
+
+    assert len(out) == 1
+    entry = out[0]
+    assert entry["name"] == "web"
+    assert entry["ttype"] == "service"
+    assert max(v for v in entry["cpu"] if v is not None) == 30.0
 
 
 async def test_bucketed_skips_rate_on_counter_reset() -> None:
@@ -198,3 +251,40 @@ async def test_find_text_ignores_other_containers() -> None:
     cursor = await find_text(redis, DOCKER_HOST, "c1", "needle", cursor=None, forward=True)
 
     assert cursor is None
+
+
+async def _seed_service(
+    redis: FakeAsyncRedis, *, ts: datetime, seq: int, svc_id: str, name: str, replicas: str
+) -> str:
+    entry_id = f"{_ms(ts)}-{seq}"
+    fields = {
+        "kind": "service",
+        "docker_host": DOCKER_HOST,
+        "ts": ts.isoformat(),
+        "seq": seq,
+        "id": svc_id,
+        "name": name,
+        "replicas": replicas,
+    }
+    stream = stream_key(DOCKER_HOST, Kind.SERVICE)
+    await redis.xadd(stream, {"data": json.dumps(fields)}, id=entry_id)
+    return entry_id
+
+
+async def test_latest_services_returns_only_the_newest_cycle() -> None:
+    redis = FakeAsyncRedis()
+    t0 = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    # Stale cycle: one service, later replaced by a fresh cycle of two.
+    await _seed_service(redis, ts=t0, seq=1, svc_id="s0", name="stale", replicas="1/1")
+    t1 = _dt(_ms(t0) + 5000)
+    await _seed_service(redis, ts=t1, seq=1, svc_id="s1", name="web", replicas="3/3")
+    await _seed_service(redis, ts=t1, seq=2, svc_id="s2", name="db", replicas="1/1")
+
+    services = await latest_services(redis, DOCKER_HOST)
+
+    assert {s.name for s in services} == {"web", "db"}
+
+
+async def test_latest_services_empty_when_never_shipped() -> None:
+    redis = FakeAsyncRedis()
+    assert await latest_services(redis, DOCKER_HOST) == []

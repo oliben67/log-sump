@@ -29,6 +29,7 @@ from .container_tracker import ContainerTracker
 from .containers_listing import run_containers_listing
 from .logging_setup import RecordsLogger
 from .registry import ContainerRef, Registry
+from .services_listing import run_services_listing
 from .system_stats import run_system_stats
 
 logger = structlog.get_logger(__name__)
@@ -141,6 +142,17 @@ async def run_daemon(
             listing_interval_s=settings.listener.listing_interval_s,
         ),
         tracker.run_forever(),
+        # Discovery only (cttc's docker_ps's "services" list) -- always on,
+        # like containers-listing, and just as tolerant of a non-swarm
+        # daemon (the common case: every cycle no-ops, see its own
+        # docstring). Not gated by settings.metrics.enabled -- it ships no
+        # metrics of its own, just which services currently exist.
+        run_services_listing(
+            daemon.id,
+            transport,
+            records_logger,
+            listing_interval_s=settings.listener.listing_interval_s,
+        ),
     ]
     if settings.metrics.enabled:
         tasks.append(

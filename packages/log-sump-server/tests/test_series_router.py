@@ -74,7 +74,9 @@ async def test_point_returns_nearest_metric_per_container(
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["services"]["c1"]["cpu_pct"] == 42.0
+    # grouped by container_name ("web", no dot -- not a swarm task), not container_id
+    assert body["services"]["web"]["cpu_pct"] == 42.0
+    assert body["services"]["web"]["ttype"] == "container"
 
 
 async def test_series_requires_daemon_access(client: AsyncClient) -> None:
@@ -110,6 +112,33 @@ async def test_logs_find_returns_cursor_of_match(
     assert resp.json()["cursor"] == "1786729800000-0"
 
 
+async def test_services_returns_latest_listing_cycle(
+    client: AsyncClient, redis: FakeAsyncRedis
+) -> None:
+    service_json = (
+        '{"kind":"service","docker_host":"daemon-a","ts":"2026-08-14T12:00:00Z","seq":1,'
+        '"id":"s1","name":"web","replicas":"3/3"}'
+    )
+    await redis.xadd(
+        stream_key("daemon-a", Kind.SERVICE), {"data": service_json}, id="1786729800000-0"
+    )
+
+    resp = await client.get(
+        "/services", params={"docker_host": "daemon-a"}, headers=_auth_headers()
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["services"] == [{"id": "s1", "name": "web", "replicas": "3/3"}]
+
+
+async def test_services_empty_on_a_non_swarm_daemon(client: AsyncClient) -> None:
+    resp = await client.get(
+        "/services", params={"docker_host": "daemon-a"}, headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    assert resp.json()["services"] == []
+
+
 async def test_all_series_endpoints_require_api_key(client: AsyncClient) -> None:
     common = {"docker_host": "daemon-a"}
     window = {"start": "2026-08-14T00:00:00Z", "end": "2026-08-14T23:59:59Z"}
@@ -119,6 +148,7 @@ async def test_all_series_endpoints_require_api_key(client: AsyncClient) -> None
         ("/ticks", {**common, "container_id": "c1", **window}),
         ("/series", {**common, **window}),
         ("/logs/find", {**common, "container_id": "c1", "q": "x"}),
+        ("/services", common),
     ]
     for path, params in endpoints:
         resp = await client.get(path, params=params)

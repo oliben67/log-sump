@@ -67,6 +67,10 @@ async def _trim_once(
     for docker_host in daemon_ids:
         await _trim_stream(redis, docker_host, Kind.LOG, log_minid)
         await _trim_stream(redis, docker_host, Kind.METRIC, metric_minid)
+        # :service carries no metrics of its own retention_days config
+        # (migration plan Phase 1b) -- reused since it's operational/
+        # discovery data, closer in spirit to logs than to metrics.
+        await _trim_stream(redis, docker_host, Kind.SERVICE, log_minid)
 
 
 async def _trim_stream(redis: Redis, docker_host: str, kind: Kind, minid_ms: int) -> None:

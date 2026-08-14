@@ -8,7 +8,7 @@ wraps.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from log_sump_common.schema import Kind, MetricRecord
@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from ..deps import get_permitted_daemons, get_redis, require_daemon_access
-from ..queries import bucketed, find_text, index_at, point_at, ticks
+from ..queries import bucketed, find_text, index_at, latest_services, point_at, ticks
 
 router = APIRouter()
 
@@ -24,6 +24,7 @@ router = APIRouter()
 class PointService(BaseModel):
     container_id: str
     container_name: str
+    ttype: Literal["service", "container"]
     ts: datetime
     cpu_pct: float | None = None
     mem_pct: float | None = None
@@ -45,15 +46,16 @@ async def get_point(
     require_daemon_access(docker_host, permitted)
     nearest = await point_at(redis, docker_host, Kind.METRIC, t)
     services = {
-        cid: PointService(
+        group: PointService(
             container_id=record.container_id,
             container_name=record.container_name,
+            ttype="service" if is_service else "container",
             ts=record.ts,
             cpu_pct=record.cpu_pct,
             mem_pct=record.mem_pct,
             mem_used_bytes=record.mem_used_bytes,
         )
-        for cid, (_entry_id, record) in nearest.items()
+        for group, (_entry_id, record, is_service) in nearest.items()
         if isinstance(record, MetricRecord)  # point_at is generic over Kind; narrow for mypy/ty
     }
     return PointResponse(t=t, services=services)
@@ -96,8 +98,8 @@ async def get_ticks(
 
 
 class SeriesEntry(BaseModel):
-    container_id: str
     name: str
+    ttype: Literal["service", "container"]
     cpu: list[float | None]
     mem: list[float | None]
     net: list[float | None]
@@ -145,3 +147,31 @@ async def get_logs_find(
         redis, docker_host, container_id, q, cursor=cursor, forward=direction != "back"
     )
     return FindResponse(cursor=hit)
+
+
+class ServiceEntry(BaseModel):
+    id: str
+    name: str
+    replicas: str
+
+
+class ServicesResponse(BaseModel):
+    services: list[ServiceEntry]
+
+
+@router.get("/services")
+async def get_services(
+    docker_host: str,
+    permitted: Annotated[frozenset[str], Depends(get_permitted_daemons)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> ServicesResponse:
+    """The daemon's currently-listed swarm services (`docker service ls`) --
+    cttc's `docker_ps`'s "services" list, offered by the Set Sources picker
+    alongside individual containers. Empty on a non-swarm daemon, not an
+    error (see `services_listing.py`'s own tolerance for "not a manager").
+    """
+    require_daemon_access(docker_host, permitted)
+    records = await latest_services(redis, docker_host)
+    return ServicesResponse(
+        services=[ServiceEntry(id=r.id, name=r.name, replicas=r.replicas) for r in records]
+    )

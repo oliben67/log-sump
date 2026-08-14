@@ -7,6 +7,7 @@ from log_sump_common.schema import (
     LogRecord,
     MetricRecord,
     RecordAdapter,
+    ServiceRecord,
 )
 
 
@@ -85,5 +86,28 @@ def test_kind_discriminator_picks_correct_variant() -> None:
         '{"kind":"metric","docker_host":"d","container_name":"c","container_id":"c1",'
         '"ts":"2026-08-14T12:00:00Z","seq":1,"metric_scope":"container","source":"docker stats"}'
     )
+    service_json = (
+        '{"kind":"service","docker_host":"d","ts":"2026-08-14T12:00:00Z","seq":1,'
+        '"id":"s1","name":"web","replicas":"3/3"}'
+    )
     assert isinstance(RecordAdapter.validate_json(log_json), LogRecord)
     assert isinstance(RecordAdapter.validate_json(metric_json), MetricRecord)
+    assert isinstance(RecordAdapter.validate_json(service_json), ServiceRecord)
+
+
+def test_service_record_round_trips_through_json() -> None:
+    record = ServiceRecord(
+        docker_host="daemon-a",
+        ts=datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC),
+        seq=1,
+        id="s1abc",
+        name="web",
+        replicas="3/3",
+    )
+    payload = RecordAdapter.dump_json(record)
+    restored = RecordAdapter.validate_json(payload)
+
+    assert isinstance(restored, ServiceRecord)
+    assert restored.kind == Kind.SERVICE
+    assert restored.name == "web"
+    assert restored.replicas == "3/3"

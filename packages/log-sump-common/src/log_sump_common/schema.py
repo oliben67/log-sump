@@ -22,6 +22,7 @@ SYSTEM_SCOPE_ID = "__system__"
 class Kind(StrEnum):
     LOG = "log"
     METRIC = "metric"
+    SERVICE = "service"
 
 
 class RecordBase(BaseModel):
@@ -58,7 +59,26 @@ class MetricRecord(RecordBase):
     raw: Any = None
 
 
-Record = Annotated[LogRecord | MetricRecord, Field(discriminator="kind")]
+class ServiceRecord(BaseModel):
+    """One swarm service, from one `docker service ls` listing cycle
+    (cttc's `docker_ps`'s "services" list, used by the Set Sources picker to
+    offer a whole service -- not one task/container -- as a collection
+    target). Not a `RecordBase`: a service isn't a container, so it carries
+    no `container_name`/`container_id`. Every service from the same listing
+    cycle shares that cycle's own `ts`, which `queries.latest_services`
+    relies on to find "the current listing" without a separate snapshot key.
+    """
+
+    kind: Literal[Kind.SERVICE] = Kind.SERVICE
+    docker_host: str
+    ts: datetime
+    seq: int
+    id: str
+    name: str
+    replicas: str
+
+
+Record = Annotated[LogRecord | MetricRecord | ServiceRecord, Field(discriminator="kind")]
 
 
 class RecordAdapter:
@@ -69,16 +89,16 @@ class RecordAdapter:
     rather than each caller constructing its own.
     """
 
-    _adapter: TypeAdapter[LogRecord | MetricRecord] = TypeAdapter(Record)
+    _adapter: TypeAdapter[LogRecord | MetricRecord | ServiceRecord] = TypeAdapter(Record)
 
     @classmethod
-    def validate_json(cls, data: str | bytes) -> LogRecord | MetricRecord:
+    def validate_json(cls, data: str | bytes) -> LogRecord | MetricRecord | ServiceRecord:
         return cls._adapter.validate_json(data)
 
     @classmethod
-    def validate_python(cls, data: Any) -> LogRecord | MetricRecord:
+    def validate_python(cls, data: Any) -> LogRecord | MetricRecord | ServiceRecord:
         return cls._adapter.validate_python(data)
 
     @classmethod
-    def dump_json(cls, record: LogRecord | MetricRecord) -> bytes:
+    def dump_json(cls, record: LogRecord | MetricRecord | ServiceRecord) -> bytes:
         return cls._adapter.dump_json(record)
