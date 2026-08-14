@@ -495,6 +495,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "log-sump-common" },
     { name = "pydantic" },
+    { name = "python-multipart" },
     { name = "redis" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
@@ -505,6 +506,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "log-sump-common", editable = "packages/log-sump-common" },
     { name = "pydantic", specifier = ">=2.9" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "redis", specifier = ">=5.2" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
@@ -743,6 +745,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a2/7f/18db482559941479f322b4a526ecf7ccd90705f01dea12a2930a434b3123/python_logstash_async-4.1.0.tar.gz", hash = "sha256:05c8647a147d2e6b39aa8f0d95ba461030e646af0d15ff2d19a5d802346cb1dc", size = 38135, upload-time = "2025-11-23T16:22:59.586Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/74/40/1910bfe3bec0def5f289844a76e901b38f0526a1c34450c5f813bf501269/python_logstash_async-4.1.0-py2.py3-none-any.whl", hash = "sha256:3fdeaac5b067a4a7d60c35d0d0b077483607e39c5c29d887775a0d213442cd9b", size = 25183, upload-time = "2025-11-23T16:22:58.059Z" },
+]
+
+[[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
 ]
 
 [[package]]

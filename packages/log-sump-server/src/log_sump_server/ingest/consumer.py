@@ -24,11 +24,13 @@ from __future__ import annotations
 import asyncio
 
 import structlog
-from log_sump_common.redis_keys import INGEST_LIST, stream_key
+from log_sump_common.redis_keys import INGEST_LIST
 from log_sump_common.schema import RecordAdapter
 from pydantic import ValidationError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
+
+from .write import queue_record
 
 logger = structlog.get_logger(__name__)
 
@@ -85,9 +87,7 @@ async def _ingest_batch(redis: Redis, batch: list[bytes | str | int]) -> None:
         except ValidationError as exc:
             await logger.awarning("consumer.malformed_record", error=str(exc))
             continue
-        pipe.xadd(
-            stream_key(record.docker_host, record.kind), {"data": RecordAdapter.dump_json(record)}
-        )
+        queue_record(pipe, record)
         queued += 1
     if queued:
         await pipe.execute()

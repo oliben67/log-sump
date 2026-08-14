@@ -62,6 +62,21 @@ async def require_valid_api_key(
     """
 
 
+async def get_raw_api_key(
+    permitted: Annotated[frozenset[str], Security(get_permitted_daemons)],
+    api_key: Annotated[str | None, Security(_api_key_header)] = None,
+) -> str:
+    """The caller's own validated API key string — for a route (file
+    upload) that needs to *grant* this key access to something new, not
+    just check what it can already see (see local_upload.py). Depends on
+    `get_permitted_daemons` first so an invalid/missing key still 401s the
+    same way every other route does — `api_key` is guaranteed non-`None`
+    by the time that dependency has already succeeded.
+    """
+    assert api_key is not None
+    return api_key
+
+
 def require_daemon_access(docker_host: str, permitted: frozenset[str]) -> None:
     """Plain helper (not a FastAPI dependency) — call from a route handler
     that already has `docker_host` as its own query/path param and

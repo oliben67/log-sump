@@ -22,7 +22,7 @@ from redis.asyncio import Redis
 
 from .ingest.consumer import run_consumer
 from .ingest.trimmer import run_trimmer
-from .routers import admin, catalog, health, records, series
+from .routers import admin, catalog, files, health, records, series
 
 logger = structlog.get_logger(__name__)
 
@@ -74,6 +74,7 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(records.router)
     app.include_router(admin.router)
     app.include_router(series.router)
+    app.include_router(files.router)
     return app
 
 
