@@ -1,16 +1,16 @@
-"""Reader for cttc's `.cttc-metric`/`.cttc-record` archive format (zip +
-`manifest.json`) -- migration plan Phase 2. Unchanged from cttc's own
-`cttc_format.py`/`server.py` (`_write_segment`/`_read_segments`/
-`build_sample_bytes`/`load_sample`) so a sample exported by today's
-`app/server` reads back byte-for-byte compatible here.
+"""Reader/writer for cttc's `.cttc-metric`/`.cttc-record` archive format
+(zip + `manifest.json`) -- migration plan Phases 2 and 4. Unchanged from
+cttc's own `cttc_format.py`/`server.py` (`_write_segment`/`_read_segments`/
+`build_sample_bytes`/`load_sample`) in both directions, so a sample
+exported by today's `app/server` reads back byte-for-byte compatible here,
+and a session/buffer written here loads back into cttc's own
+`load_sample` (or `read_archive` below) identically.
 
 Dependency-free (no Redis/FastAPI ties), like cttc's own `cttc_format.py`
-was kept, so both `log-sump-server`'s upload router and any future export
-path can use it without a circular import.
-
-Only the *reader* lives here for now: Phase 2 covers importing a sample;
-producing one from log-sump's own Streams is scheduled alongside recording
-sessions (Phase 4), which is the feature that actually needs to write one.
+was kept, so both the upload router (Phase 2) and sessions.py/buffers.py
+(Phase 4) can use it without a circular import. Neither direction knows
+anything about Streams, sessions, or buffers -- callers gather the data,
+this module only knows the archive's own shape.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import io
 import json
 import zipfile
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 METRIC_EXT = ".cttc-metric"
 RECORD_EXT = ".cttc-record"
@@ -141,3 +142,52 @@ def read_archive(data: bytes, *, segment: int | None = None) -> list[ArchivedSou
                     )
                 )
         return sources
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def write_archive(
+    t0: float,
+    t1: float,
+    log_sources: list[tuple[str, list[tuple[float, str]]]],
+    stats_series: dict[str, list[StatsRow]],
+    swarm_services: list[str],
+) -> bytes:
+    """Builds a single-segment `.cttc-metric`/`.cttc-record` archive --
+    the write-side counterpart to `read_archive` (migration plan Phase 4:
+    sessions.py/buffers.py are the callers). `log_sources` is `(name,
+    [(ts_ms, text), ...])` per container; `stats_series` is `{name: rows}`
+    for every service/container on the exported daemon, all bundled into
+    one stats source (log-sump has no notion of cttc's separate per-
+    collector stats sources -- one daemon's whole metric set stands in for
+    it here, which is what `queries.export_window` already gathers).
+
+    Always one segment: cttc's multi-segment archives are its separate
+    Record/Pause/Stop feature (`merge_sample_bytes`), out of scope here --
+    every log-sump session/buffer is a single, contiguous [t0, t1] window.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        sources_meta: list[dict] = []
+        for i, (name, rows) in enumerate(log_sources):
+            if not rows:
+                continue
+            fn = f"seg0/logs/{i}.jsonl"
+            lines = "\n".join(json.dumps({"ts": ts, "text": text}) for ts, text in rows)
+            z.writestr(fn, lines)
+            sources_meta.append({"type": "log", "name": name, "file": fn, "count": len(rows)})
+
+        if stats_series:
+            fn = "seg0/stats/0.json"
+            series = {name: [list(row) for row in rows] for name, rows in stats_series.items()}
+            payload = {"series": series, "swarm": swarm_services}
+            z.writestr(fn, json.dumps(payload))
+            sources_meta.append({"type": "stats", "name": "stats", "file": fn, "is_host": False})
+
+        segment = {"from": t0, "to": t1, "created": _now_iso(), "sources": sources_meta}
+        manifest = {"version": 3, "segments": [segment]}
+        manifest["integrity_sha256"] = _manifest_hash(manifest)
+        z.writestr("manifest.json", json.dumps(manifest))
+    return buf.getvalue()

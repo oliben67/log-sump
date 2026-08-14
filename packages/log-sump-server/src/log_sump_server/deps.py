@@ -25,6 +25,10 @@ from log_sump_common.auth import RedisApiKeyAuthBackend
 from log_sump_common.config import Settings
 from redis.asyncio import Redis
 
+from .buffers import BufferManager
+from .scheduling import Scheduler
+from .sessions import SessionManager
+
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -84,3 +88,18 @@ def require_daemon_access(docker_host: str, permitted: frozenset[str]) -> None:
     """
     if docker_host not in permitted:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"not permitted for daemon {docker_host!r}")
+
+
+def get_session_manager(request: Request) -> SessionManager:
+    manager: SessionManager = request.app.state.sessions
+    return manager
+
+
+def get_buffer_manager(request: Request) -> BufferManager:
+    manager: BufferManager = request.app.state.buffers
+    return manager
+
+
+def get_scheduler(request: Request) -> Scheduler:
+    scheduler: Scheduler = request.app.state.scheduler
+    return scheduler

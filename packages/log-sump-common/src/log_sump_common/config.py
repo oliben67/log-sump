@@ -94,6 +94,11 @@ class ServerConfig(BaseModel):
     bind_port: int = 8080
     page_size_default: int = 200
     page_size_max: int = 1000
+    #: How often sessions/buffers/scheduler are ticked (migration plan
+    #: Phase 4) -- cheap, in-memory-only sweeps; the actual Redis I/O only
+    #: happens when a session/buffer's window is actually exported, not on
+    #: every tick.
+    tick_interval_seconds: float = 5.0
 
 
 class Settings(BaseSettings):

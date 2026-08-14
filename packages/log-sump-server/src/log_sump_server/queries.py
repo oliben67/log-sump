@@ -26,6 +26,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, TypedDict
 
+from log_sump_common.cttc_archive import StatsRow
 from log_sump_common.redis_keys import stream_key
 from log_sump_common.schema import Kind, LogRecord, MetricRecord, RecordAdapter, ServiceRecord
 from pydantic import ValidationError
@@ -519,3 +520,88 @@ async def latest_services(
             break  # newest-first order -- a different ts means we've left the latest cycle
         records.append(record)
     return records
+
+
+class WindowExport(TypedDict):
+    #: (container_id, [(ts_ms, message), ...]) per container -- no service
+    #: merge on the log side, matching `LogSource`/`_metric_group`'s own
+    #: docstring on why that's metric-only.
+    log_sources: list[tuple[str, list[tuple[float, str]]]]
+    #: {display group: rows}, already service-merged (see `_metric_group`).
+    stats_series: dict[str, list[StatsRow]]
+    swarm_services: list[str]
+
+
+async def export_window(
+    redis: Redis, docker_host: str, t0: datetime, t1: datetime
+) -> WindowExport:
+    """Every log/metric record for `docker_host` in `[t0, t1]`, at full
+    resolution and shaped for `cttc_archive.write_archive` -- the
+    recording-sessions/rolling-buffers counterpart to `bucketed` (which
+    downsamples to `px` pixel buckets for chart rendering instead of
+    keeping every raw sample). Migration plan Phase 4.
+    """
+    log_stream = stream_key(docker_host, Kind.LOG)
+    log_raw = await redis.xrange(log_stream, min=_id_floor(t0), max=_id_ceiling(t1))
+    by_container_logs: dict[str, list[tuple[float, str]]] = {}
+    for entry_id, fields in log_raw or []:
+        if entry_id is None:
+            continue
+        record = _decode_entry(fields)
+        if record is None:
+            continue
+        message = str(getattr(record, "message", ""))
+        by_container_logs.setdefault(record.container_id, []).append(
+            (float(_ts_ms(entry_id)), message)
+        )
+    log_sources = [
+        (container_id, sorted(rows, key=lambda row: row[0]))
+        for container_id, rows in by_container_logs.items()
+    ]
+
+    metric_stream = stream_key(docker_host, Kind.METRIC)
+    metric_raw = await redis.xrange(metric_stream, min=_id_floor(t0), max=_id_ceiling(t1))
+    by_container_metrics: dict[str, list[tuple[int, MetricRecord]]] = {}
+    for entry_id, fields in metric_raw or []:
+        if entry_id is None:
+            continue
+        record = _decode_entry(fields)
+        if not isinstance(record, MetricRecord):
+            continue
+        by_container_metrics.setdefault(record.container_id, []).append(
+            (_ts_ms(entry_id), record)
+        )
+
+    stats_series: dict[str, list[StatsRow]] = {}
+    swarm_services: set[str] = set()
+    for samples in by_container_metrics.values():
+        samples.sort(key=lambda pair: pair[0])
+        rows: list[StatsRow] = []
+        prev_total: tuple[int, int] | None = None
+        for ts_ms, record in samples:
+            total = None
+            if record.net_rx_bytes is not None and record.net_tx_bytes is not None:
+                total = record.net_rx_bytes + record.net_tx_bytes
+            rate = None
+            if total is not None and prev_total is not None and ts_ms > prev_total[0]:
+                delta = total - prev_total[1]
+                if delta >= 0:  # negative == counter reset (restart); skip, matches bucketed()
+                    rate = delta / ((ts_ms - prev_total[0]) / 1000.0)
+            if total is not None:
+                prev_total = (ts_ms, total)
+            mem_bytes = float(record.mem_used_bytes) if record.mem_used_bytes is not None else None
+            rows.append((float(ts_ms), record.cpu_pct, record.mem_pct, mem_bytes, rate))
+
+        group, is_service = _metric_group(samples[0][1].container_name)
+        if is_service:
+            swarm_services.add(group)
+        stats_series.setdefault(group, []).extend(rows)
+
+    for rows in stats_series.values():
+        rows.sort(key=lambda row: row[0])
+
+    return WindowExport(
+        log_sources=log_sources,
+        stats_series=stats_series,
+        swarm_services=sorted(swarm_services),
+    )

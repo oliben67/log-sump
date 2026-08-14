@@ -20,11 +20,40 @@ from log_sump_common.auth import RedisApiKeyAuthBackend
 from log_sump_common.config import Settings, load_settings
 from redis.asyncio import Redis
 
+from .buffers import BufferManager
 from .ingest.consumer import run_consumer
 from .ingest.trimmer import run_trimmer
 from .routers import admin, catalog, daemons, files, health, records, series
+from .routers import buffers as buffers_router
+from .routers import scheduling as scheduling_router
+from .routers import sessions as sessions_router
+from .scheduling import Scheduler
+from .sessions import SessionManager
 
 logger = structlog.get_logger(__name__)
+
+
+async def run_tick_loop(
+    sessions: SessionManager,
+    buffers: BufferManager,
+    scheduler: Scheduler,
+    *,
+    interval_seconds: float,
+) -> None:
+    """Periodically ticks sessions/buffers/scheduler (migration plan
+    Phase 4) -- cttc's own equivalent is referenced across
+    recording_session.py/rolling_buffer.py's docstrings as "server.py's
+    background loop"/"sessions_loop". One combined loop, not three
+    separate tasks: these tick()s are cheap, in-memory-only sweeps: the
+    actual Redis I/O only happens when a session/buffer's window is
+    actually exported (on stop, or once a session's own duration elapses),
+    not on every tick.
+    """
+    while True:
+        await sessions.tick()
+        buffers.tick()
+        scheduler.tick()
+        await asyncio.sleep(interval_seconds)
 
 
 def create_app(settings: Settings | None = None, redis: Redis | None = None) -> FastAPI:
@@ -46,6 +75,9 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
         app.state.settings = settings
         app.state.redis = redis
         app.state.auth_backend = RedisApiKeyAuthBackend(redis)
+        app.state.sessions = SessionManager(redis)
+        app.state.buffers = BufferManager(redis)
+        app.state.scheduler = Scheduler(app.state.sessions)
 
         daemon_ids = [daemon.id for daemon in settings.daemons]
         consumer_task = asyncio.create_task(run_consumer(redis))
@@ -58,13 +90,21 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
                 trim_interval_seconds=settings.retention.trim_interval_seconds,
             )
         )
+        tick_task = asyncio.create_task(
+            run_tick_loop(
+                app.state.sessions,
+                app.state.buffers,
+                app.state.scheduler,
+                interval_seconds=settings.server.tick_interval_seconds,
+            )
+        )
         await logger.ainfo("server.starting", daemon_ids=daemon_ids)
         try:
             yield
         finally:
-            for task in (consumer_task, trimmer_task):
+            for task in (consumer_task, trimmer_task, tick_task):
                 task.cancel()
-            await asyncio.gather(consumer_task, trimmer_task, return_exceptions=True)
+            await asyncio.gather(consumer_task, trimmer_task, tick_task, return_exceptions=True)
             if owns_redis:
                 await redis.aclose()
 
@@ -76,6 +116,9 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(series.router)
     app.include_router(files.router)
     app.include_router(daemons.router)
+    app.include_router(sessions_router.router)
+    app.include_router(buffers_router.router)
+    app.include_router(scheduling_router.router)
     return app
 
 

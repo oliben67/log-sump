@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2.9",
     "structlog>=24.4",
     "python-multipart>=0.0.9",  # required by FastAPI's UploadFile (POST /files/upload)
+    "croniter>=6.0",  # scheduling.py (Phase 4) -- same as cttc's own server.py dependency
 ]
 
 [tool.uv.sources]

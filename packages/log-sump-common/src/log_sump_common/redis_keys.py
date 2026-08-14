@@ -42,6 +42,17 @@ def daemons_key() -> str:
     return f"{_PREFIX}:daemons"
 
 
+def session_data_key(session_id: str) -> str:
+    """A completed recording session's archive bytes (migration plan
+    Phase 4, `sessions.py`) -- kept in Redis rather than log-server's own
+    (not guaranteed persistent) local disk, with a TTL matching the
+    session's own retention. `_sessions`' status/metadata bookkeeping stays
+    in-process only, same as cttc's own session dict -- only the archive
+    payload itself needs to survive here.
+    """
+    return f"{_PREFIX}:session:{session_id}:data"
+
+
 def auth_key(api_key: str) -> str:
     """Set of permitted `docker_host` values for a given API key.
 
