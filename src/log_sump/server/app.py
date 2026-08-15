@@ -27,6 +27,7 @@ from .buffers import BufferManager
 from .events import EventManager
 from .ingest.consumer import run_consumer
 from .ingest.trimmer import run_trimmer
+from .plugins import load_plugin_routers
 from .routers import admin, catalog, daemons, files, gateway, health, records, series
 from .routers import buffers as buffers_router
 from .routers import events as events_router
@@ -164,6 +165,9 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(transforms_router.router)
     app.include_router(live_router.router)
     app.include_router(gateway.router)
+    if settings.plugins.directory:
+        for _name, plugin_router in load_plugin_routers(Path(settings.plugins.directory)):
+            app.include_router(plugin_router)
     return app
 
 
