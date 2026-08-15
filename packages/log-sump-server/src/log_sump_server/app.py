@@ -17,7 +17,7 @@ from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
-from log_sump_common.auth import RedisApiKeyAuthBackend
+from log_sump_common.auth import GatewayTokenAuthBackend, RedisApiKeyAuthBackend
 from log_sump_common.config import Settings, load_settings
 from redis.asyncio import Redis
 
@@ -26,7 +26,7 @@ from .buffers import BufferManager
 from .events import EventManager
 from .ingest.consumer import run_consumer
 from .ingest.trimmer import run_trimmer
-from .routers import admin, catalog, daemons, files, health, records, series
+from .routers import admin, catalog, daemons, files, gateway, health, records, series
 from .routers import buffers as buffers_router
 from .routers import events as events_router
 from .routers import live as live_router
@@ -93,6 +93,7 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
         app.state.settings = settings
         app.state.redis = redis
         app.state.auth_backend = RedisApiKeyAuthBackend(redis)
+        app.state.gateway_token_backend = GatewayTokenAuthBackend(settings.gateway.token)
         app.state.sessions = SessionManager(redis)
         app.state.buffers = BufferManager(redis)
         app.state.scheduler = Scheduler(app.state.sessions)
@@ -161,6 +162,7 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(events_router.router)
     app.include_router(transforms_router.router)
     app.include_router(live_router.router)
+    app.include_router(gateway.router)
     return app
 
 

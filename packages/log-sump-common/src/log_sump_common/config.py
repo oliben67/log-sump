@@ -120,6 +120,33 @@ class TransformsConfig(BaseModel):
     active: list[str] = Field(default_factory=list)
 
 
+class GatewayConfig(BaseModel):
+    """Gateway-mesh + admin-auth tunables (migration plan Phase 7) --
+    cttc's own equivalents (`CTTC_API_TOKEN`, `PUBLIC_ADDRESS`/
+    `ADVERTISED_HOST_PORT`, `ADMIN_NONCE_TTL_SECONDS`, `GATEWAY_LIST_MAX_ENTRIES`)
+    are a mix of argparse flags and raw (unprefixed) env vars read directly
+    by `server.py`'s own `main()` -- log-sump has no argparse-based CLI at
+    all, so these become ordinary `Settings` fields instead, under the
+    standard `LOG_SUMP_GATEWAY__*` env var namespace. A later phase's
+    Electron integration (main.js) needs to set `LOG_SUMP_GATEWAY__TOKEN`
+    (not `CTTC_API_TOKEN`) when it starts driving this process.
+    """
+
+    #: Shared secret required (as the `X-CTTC-Token` header, or a `?token=`
+    #: query param for the one client -- browser EventSource -- that can't
+    #: set a custom header) on every gateway-mesh/admin route when set.
+    #: Unset (the default) leaves those routes exactly as unauthenticated
+    #: as an embedded, never-network-reachable "This machine" gateway
+    #: already is -- matches cttc's own `_require_api_token` semantics.
+    token: str | None = None
+    #: Overrides the inferred self-address (`Host` header) used for this
+    #: gateway's own entry in the peer-discovery list -- matches cttc's
+    #: `PUBLIC_ADDRESS`/`ADVERTISED_HOST_PORT` env override.
+    public_address: str | None = None
+    admin_nonce_ttl_seconds: float = 120.0
+    gateway_list_max_entries: int = 500
+
+
 class Settings(BaseSettings):
     daemons: list[DaemonConfig] = Field(default_factory=list)
     listener: ListenerConfig = Field(default_factory=ListenerConfig)
@@ -129,6 +156,7 @@ class Settings(BaseSettings):
     redis: RedisConfig = Field(default_factory=RedisConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     transforms: TransformsConfig = Field(default_factory=TransformsConfig)
+    gateway: GatewayConfig = Field(default_factory=GatewayConfig)
 
     model_config = SettingsConfigDict(
         env_prefix="LOG_SUMP_",

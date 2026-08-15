@@ -21,7 +21,7 @@ from typing import Annotated
 
 from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
-from log_sump_common.auth import RedisApiKeyAuthBackend
+from log_sump_common.auth import GatewayTokenAuthBackend, RedisApiKeyAuthBackend
 from log_sump_common.config import Settings
 from redis.asyncio import Redis
 
@@ -32,6 +32,7 @@ from .scheduling import Scheduler
 from .sessions import SessionManager
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_gateway_token_header = APIKeyHeader(name="X-CTTC-Token", auto_error=False)
 
 
 def get_settings(request: Request) -> Settings:
@@ -135,3 +136,28 @@ def get_event_manager(request: Request) -> EventManager:
 def get_broadcaster(request: Request) -> Broadcaster:
     broadcaster: Broadcaster = request.app.state.broadcaster
     return broadcaster
+
+
+async def require_gateway_token(
+    request: Request,
+    header_token: Annotated[str | None, Security(_gateway_token_header)] = None,
+) -> None:
+    """Gates a gateway-mesh/admin route behind the shared-secret gateway
+    token (migration plan Phase 7) -- cttc's own `_require_api_token`,
+    translated from a blanket middleware into an ordinary per-route
+    dependency to match this codebase's existing convention (every other
+    auth tier here is a `Depends()`, not middleware; see this module's own
+    docstring). Unlike `require_valid_api_key`, a missing/unset
+    `GatewayTokenAuthBackend.token` means "no gate at all", not "reject" --
+    matches cttc's own "unset stays exactly as permissive as it always was"
+    semantics for the embedded, never-network-reachable deployment case.
+
+    Accepts a `?token=` query param as a fallback alongside the header, for
+    the same reason `require_valid_api_key_sse` does: a browser's native
+    `EventSource`/plain navigation (`GET /mlog`'s download) can't always
+    attach a custom header.
+    """
+    backend: GatewayTokenAuthBackend = request.app.state.gateway_token_backend
+    presented = header_token or request.query_params.get("token")
+    if not backend.is_valid(presented):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or incorrect X-CTTC-Token")

@@ -53,6 +53,30 @@ def session_data_key(session_id: str) -> str:
     return f"{_PREFIX}:session:{session_id}:data"
 
 
+def gateway_ownership_key() -> str:
+    """This gateway's ownership record (migration plan Phase 7, `gateway_mesh.py`)
+    -- who claimed it, for admin-action signature verification. One record
+    per gateway process, same as cttc's own `cttc:gateway:ownership`.
+    """
+    return f"{_PREFIX}:gateway:ownership"
+
+
+def gateway_nonce_key(nonce: str) -> str:
+    """A short-lived, single-use admin-action challenge (migration plan
+    Phase 7) -- matches cttc's own `cttc:gateway:nonce:{nonce}`.
+    """
+    return f"{_PREFIX}:gateway:nonce:{nonce}"
+
+
+def gateway_list_key() -> str:
+    """This gateway's peer-discovery list (migration plan Phase 7,
+    `gateway_mesh.py`) -- a single JSON blob keyed by each peer's own
+    canonical `lower(host):port` string, matching cttc's own
+    `cttc:gateway:list`.
+    """
+    return f"{_PREFIX}:gateway:list"
+
+
 def auth_key(api_key: str) -> str:
     """Set of permitted `docker_host` values for a given API key.
 
