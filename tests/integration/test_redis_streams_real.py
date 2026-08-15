@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import AsyncIterator
 
 import pytest
 from redis.asyncio import Redis
@@ -37,7 +38,7 @@ LOG_RECORD_JSON = (
 
 
 @pytest.fixture
-async def redis() -> Redis:
+async def redis() -> AsyncIterator[Redis]:
     client = Redis.from_url(REDIS_URL)
     await client.ping()  # fails fast with a clear error if dev:up wasn't run
     await client.flushdb()
@@ -58,7 +59,7 @@ async def test_consumer_moves_ingest_list_entries_into_a_real_stream(redis: Redi
             # asyncio.Event has no producer to set() here.
             while await redis.llen(INGEST_LIST) != 0:  # noqa: ASYNC110
                 await asyncio.sleep(0.05)
-            entries = await redis.xrange(stream_key("integration-daemon", Kind.LOG))
+            entries = await redis.xrange(stream_key("integration-daemon", Kind.LOG)) or []
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -66,7 +67,10 @@ async def test_consumer_moves_ingest_list_entries_into_a_real_stream(redis: Redi
 
     assert len(entries) == 1
     _id, fields = entries[0]
-    assert b"hello from real redis" in fields[b"data"]
+    assert fields is not None
+    data = fields[b"data"]
+    assert isinstance(data, bytes)
+    assert b"hello from real redis" in data
 
 
 async def test_xtrim_minid_removes_old_entries_on_real_redis(redis: Redis) -> None:
@@ -80,5 +84,9 @@ async def test_xtrim_minid_removes_old_entries_on_real_redis(redis: Redis) -> No
 
     await _trim_once(redis, ["integration-daemon"], retention_days=7, metrics_retention_days=7)
 
-    entries = await redis.xrange(key)
-    assert [f[b"data"] for _id, f in entries] == [b"recent"]
+    entries = await redis.xrange(key) or []
+    values = []
+    for _id, fields in entries:
+        assert fields is not None
+        values.append(fields[b"data"])
+    assert values == [b"recent"]
