@@ -3,6 +3,7 @@ a registered daemon is immediately visible in /catalog to the key that
 registered it (the auto-provisioning pattern also used by file upload).
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -91,3 +92,35 @@ async def test_delete_yaml_seeded_daemon_returns_404(redis: FakeAsyncRedis) -> N
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             resp = await ac.delete("/daemons/yaml-daemon", headers=_auth_headers())
     assert resp.status_code == 404
+
+
+async def test_create_daemon_publishes_a_catalog_sse_event(redis: FakeAsyncRedis) -> None:
+    """Migration plan Phase 6: a connected /events client should learn a
+    daemon was added without polling /catalog itself.
+    """
+    app = create_app(settings=Settings(), redis=redis)
+    async with app.router.lifespan_context(app):
+        queue = app.state.broadcaster.subscribe()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/daemons", json={"id": "prod-a", "host": "10.0.0.5"}, headers=_auth_headers()
+            )
+        assert resp.status_code == 200
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event == {"type": "catalog"}
+
+
+async def test_delete_daemon_publishes_a_catalog_sse_event(redis: FakeAsyncRedis) -> None:
+    app = create_app(settings=Settings(), redis=redis)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            await ac.post(
+                "/daemons", json={"id": "prod-a", "host": "10.0.0.5"}, headers=_auth_headers()
+            )
+            queue = app.state.broadcaster.subscribe()  # subscribe after create's own event
+            resp = await ac.delete("/daemons/prod-a", headers=_auth_headers())
+        assert resp.status_code == 204
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event == {"type": "catalog"}

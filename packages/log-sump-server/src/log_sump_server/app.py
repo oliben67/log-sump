@@ -21,6 +21,7 @@ from log_sump_common.auth import RedisApiKeyAuthBackend
 from log_sump_common.config import Settings, load_settings
 from redis.asyncio import Redis
 
+from .broadcast import Broadcaster
 from .buffers import BufferManager
 from .events import EventManager
 from .ingest.consumer import run_consumer
@@ -28,6 +29,7 @@ from .ingest.trimmer import run_trimmer
 from .routers import admin, catalog, daemons, files, health, records, series
 from .routers import buffers as buffers_router
 from .routers import events as events_router
+from .routers import live as live_router
 from .routers import scheduling as scheduling_router
 from .routers import sessions as sessions_router
 from .routers import transforms as transforms_router
@@ -95,6 +97,7 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
         app.state.buffers = BufferManager(redis)
         app.state.scheduler = Scheduler(app.state.sessions)
         app.state.events = EventManager(redis, app.state.buffers, app.state.sessions)
+        app.state.broadcaster = Broadcaster()
 
         transform_fns: list[tuple[str, TransformFn]] = []
         if settings.transforms.directory:
@@ -106,7 +109,11 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
             app.state.transform_registry = None
 
         daemon_ids = [daemon.id for daemon in settings.daemons]
-        consumer_task = asyncio.create_task(run_consumer(redis, transform_fns=transform_fns))
+        consumer_task = asyncio.create_task(
+            run_consumer(
+                redis, transform_fns=transform_fns, broadcaster=app.state.broadcaster
+            )
+        )
         trimmer_task = asyncio.create_task(
             run_trimmer(
                 redis,
@@ -153,6 +160,7 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(scheduling_router.router)
     app.include_router(events_router.router)
     app.include_router(transforms_router.router)
+    app.include_router(live_router.router)
     return app
 
 

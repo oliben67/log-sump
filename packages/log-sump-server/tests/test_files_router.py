@@ -3,6 +3,7 @@ is immediately queryable through the ordinary daemon-scoped endpoints by
 the same key that uploaded it (the auto-provisioning local_upload.py does).
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -68,3 +69,23 @@ async def test_upload_plain_log_file_and_query_it_back(client: AsyncClient) -> N
     records = records_resp.json()["records"]
     assert len(records) == 1
     assert records[0]["message"] == "hello from upload"
+
+
+async def test_upload_publishes_an_update_sse_event(redis: FakeAsyncRedis) -> None:
+    """Migration plan Phase 6: a connected /events client should learn new
+    data landed without polling itself.
+    """
+    app = create_app(settings=Settings(), redis=redis)
+    async with app.router.lifespan_context(app):
+        queue = app.state.broadcaster.subscribe()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/files/upload",
+                files={"file": ("app.log", b"2026-08-14T12:00:00Z hi\n", "text/plain")},
+                headers=_auth_headers(),
+            )
+        assert resp.status_code == 200
+        docker_host = resp.json()["docker_host"]
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event == {"type": "update", "docker_host": docker_host}

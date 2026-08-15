@@ -25,6 +25,7 @@ from log_sump_common.auth import RedisApiKeyAuthBackend
 from log_sump_common.config import Settings
 from redis.asyncio import Redis
 
+from .broadcast import Broadcaster
 from .buffers import BufferManager
 from .events import EventManager
 from .scheduling import Scheduler
@@ -65,6 +66,26 @@ async def require_valid_api_key(
     scoped to a daemon's records at all (see redis_inspect.py's module
     docstring for why any valid key, not a separate elevated tier).
     """
+
+
+async def require_valid_api_key_sse(
+    request: Request,
+    header_key: Annotated[str | None, Security(_api_key_header)] = None,
+) -> None:
+    """Same "any valid key is enough" check as `require_valid_api_key`, but
+    also accepts the key via an `api_key` query param — the one concession
+    browsers force: a native `EventSource` (`GET /events`, `routers/
+    live.py`) can't attach a custom header at all, by spec, so the query
+    string is the only channel it has. cttc's own `_require_api_token` has
+    the identical `?token=` fallback, for the identical reason.
+    """
+    api_key = header_key or request.query_params.get("api_key")
+    if not api_key:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing API key")
+    auth_backend: RedisApiKeyAuthBackend = request.app.state.auth_backend
+    permitted = await auth_backend.permitted_daemons(api_key)
+    if permitted is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid API key")
 
 
 async def get_raw_api_key(
@@ -109,3 +130,8 @@ def get_scheduler(request: Request) -> Scheduler:
 def get_event_manager(request: Request) -> EventManager:
     manager: EventManager = request.app.state.events
     return manager
+
+
+def get_broadcaster(request: Request) -> Broadcaster:
+    broadcaster: Broadcaster = request.app.state.broadcaster
+    return broadcaster

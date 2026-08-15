@@ -47,6 +47,7 @@ from log_sump_common.redis_keys import auth_key, stream_key
 from log_sump_common.schema import Kind, LogRecord, MetricRecord
 from redis.asyncio import Redis
 
+from .broadcast import Broadcaster
 from .ingest.write import queue_record
 
 
@@ -62,12 +63,20 @@ def _synthetic_docker_host(data: bytes) -> str:
 
 
 async def ingest_upload(
-    redis: Redis, *, filename: str, data: bytes, api_key: str, segment: int | None = None
+    redis: Redis,
+    *,
+    filename: str,
+    data: bytes,
+    api_key: str,
+    segment: int | None = None,
+    broadcaster: Broadcaster | None = None,
 ) -> UploadResult:
     """Parse `data` (dispatched on `filename`'s extension, like cttc's own
     `files.upload_and_open`) into Records, bulk-`XADD`s them under a
     content-addressed synthetic `docker_host`, grants `api_key` access to
-    it, and reports what was ingested.
+    it, and reports what was ingested. `broadcaster`, if given, publishes
+    an SSE `{"type": "update", "docker_host": ...}` notification (migration
+    plan Phase 6) once the data actually lands.
 
     Raises `log_sump_common.cttc_archive.MultiSegmentArchive` unchanged --
     same "ask the caller which segment" contract as cttc's own
@@ -88,6 +97,8 @@ async def ingest_upload(
     await _bulk_write(redis, docker_host, Kind.METRIC, metrics)
     if logs or metrics:
         await redis.sadd(auth_key(api_key), docker_host)
+        if broadcaster is not None:
+            broadcaster.publish({"type": "update", "docker_host": docker_host})
     return UploadResult(docker_host=docker_host, log_count=len(logs), metric_count=len(metrics))
 
 

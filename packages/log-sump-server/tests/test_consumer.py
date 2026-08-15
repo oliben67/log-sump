@@ -5,6 +5,7 @@ import json
 from fakeredis import FakeAsyncRedis
 from log_sump_common.redis_keys import INGEST_LIST, stream_key
 from log_sump_common.schema import Kind, LogRecord, RecordAdapter
+from log_sump_server.broadcast import Broadcaster
 from log_sump_server.ingest.consumer import run_consumer
 
 LOG_RECORD_JSON = json.dumps(
@@ -133,3 +134,30 @@ async def test_consumer_applies_transform_fns_to_log_records_only() -> None:
     assert log_record.message == "HELLO"  # transformed
     metric_entries = streams[stream_key("daemon-a", Kind.METRIC)]
     assert len(metric_entries) == 1  # untouched -- transforms are log-only, matching cttc
+
+
+async def test_consumer_publishes_one_update_event_per_touched_docker_host() -> None:
+    redis = FakeAsyncRedis()
+    broadcaster = Broadcaster()
+    queue = broadcaster.subscribe()
+    await redis.rpush(INGEST_LIST, LOG_RECORD_JSON, METRIC_RECORD_JSON)
+
+    await _consume_and_capture(
+        redis,
+        [stream_key("daemon-a", Kind.LOG), stream_key("daemon-a", Kind.METRIC)],
+        poll_timeout_s=0.05,
+        broadcaster=broadcaster,
+    )
+
+    # Both records share docker_host="daemon-a" -- exactly one notification,
+    # not two, even though two separate streams received data.
+    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+    assert event == {"type": "update", "docker_host": "daemon-a"}
+    assert queue.empty()
+
+
+async def test_consumer_without_a_broadcaster_does_not_raise() -> None:
+    redis = FakeAsyncRedis()
+    await redis.rpush(INGEST_LIST, LOG_RECORD_JSON)
+
+    await _consume_and_capture(redis, [stream_key("daemon-a", Kind.LOG)], poll_timeout_s=0.05)

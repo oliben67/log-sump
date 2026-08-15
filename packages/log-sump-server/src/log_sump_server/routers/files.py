@@ -12,7 +12,8 @@ from log_sump_common.cttc_archive import MultiSegmentArchive
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from ..deps import get_raw_api_key, get_redis
+from ..broadcast import Broadcaster
+from ..deps import get_broadcaster, get_raw_api_key, get_redis
 from ..local_upload import ingest_upload
 
 router = APIRouter()
@@ -29,6 +30,7 @@ async def upload_file(
     file: UploadFile,
     redis: Annotated[Redis, Depends(get_redis)],
     api_key: Annotated[str, Depends(get_raw_api_key)],
+    broadcaster: Annotated[Broadcaster, Depends(get_broadcaster)],
     segment: int | None = None,
 ) -> UploadResponse:
     data = await file.read()
@@ -39,6 +41,7 @@ async def upload_file(
             data=data,
             api_key=api_key,
             segment=segment,
+            broadcaster=broadcaster,
         )
     except MultiSegmentArchive as exc:
         detail = {

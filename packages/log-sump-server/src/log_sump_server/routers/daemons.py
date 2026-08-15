@@ -5,7 +5,9 @@
 succeeds for a daemon that was itself registered through this endpoint --
 a YAML-configured daemon can't be removed this way (see
 `run_daemon_registry_watch`'s own "never touches a YAML-seeded daemon"
-rule on the listener side).
+rule on the listener side). Publishes a `{"type": "catalog"}` SSE
+notification (migration plan Phase 6) on every successful change, so a
+connected client knows to re-fetch `/catalog`.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ from log_sump_common.daemon_registry import register_daemon, unregister_daemon
 from log_sump_common.redis_keys import auth_key
 from redis.asyncio import Redis
 
-from ..deps import get_raw_api_key, get_redis
+from ..broadcast import Broadcaster
+from ..deps import get_broadcaster, get_raw_api_key, get_redis
 from .catalog import CatalogEntry
 
 router = APIRouter()
@@ -29,12 +32,14 @@ async def create_daemon(
     daemon: DaemonConfig,
     redis: Annotated[Redis, Depends(get_redis)],
     api_key: Annotated[str, Depends(get_raw_api_key)],
+    broadcaster: Annotated[Broadcaster, Depends(get_broadcaster)],
 ) -> CatalogEntry:
     await register_daemon(redis, daemon)
     # Same auto-provisioning as file upload (local_upload.py): the caller
     # that just registered a daemon can immediately see/query it, no
     # separate grant step.
     await redis.sadd(auth_key(api_key), daemon.id)
+    broadcaster.publish({"type": "catalog"})
     return CatalogEntry(id=daemon.id, host=daemon.host, enabled=daemon.enabled)
 
 
@@ -43,6 +48,7 @@ async def delete_daemon(
     daemon_id: str,
     redis: Annotated[Redis, Depends(get_redis)],
     _api_key: Annotated[str, Depends(get_raw_api_key)],
+    broadcaster: Annotated[Broadcaster, Depends(get_broadcaster)],
 ) -> None:
     removed = await unregister_daemon(redis, daemon_id)
     if not removed:
@@ -51,3 +57,4 @@ async def delete_daemon(
             f"{daemon_id!r} is not a dynamically-registered daemon "
             "(a YAML-configured daemon can't be removed through this endpoint)",
         )
+    broadcaster.publish({"type": "catalog"})

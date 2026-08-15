@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from ..broadcast import Broadcaster
 from ..transforms import TransformFn, apply_transforms
 from .write import queue_record
 
@@ -52,6 +53,7 @@ async def run_consumer(
     poll_timeout_s: float = POLL_TIMEOUT_S,
     batch_size: int = BATCH_SIZE,
     transform_fns: Sequence[tuple[str, TransformFn]] = (),
+    broadcaster: Broadcaster | None = None,
 ) -> None:
     """`transform_fns` (migration plan Phase 5, `transforms.py`), if given,
     is applied to every incoming `LogRecord` immediately before this
@@ -59,6 +61,13 @@ async def run_consumer(
     apply_transforms`'s docstring. Never applied to `MetricRecord`/
     `ServiceRecord`, matching cttc's own transform system (`LogSource`
     only, never `StatsSource`).
+
+    `broadcaster` (migration plan Phase 6, `broadcast.py`), if given,
+    publishes one `{"type": "update", "docker_host": ...}` SSE notification
+    per distinct `docker_host` that received at least one record in a
+    successfully-written batch -- cttc's own `broadcast({"type": "update",
+    "source": ...})`, at daemon granularity (log-sump's own addressing
+    unit throughout this migration) rather than per opened source.
     """
     while True:
         try:
@@ -67,6 +76,7 @@ async def run_consumer(
                 poll_timeout_s=poll_timeout_s,
                 batch_size=batch_size,
                 transform_fns=transform_fns,
+                broadcaster=broadcaster,
             )
         except RedisError as exc:
             await logger.awarning("consumer.cycle_failed", error=str(exc))
@@ -79,6 +89,7 @@ async def _consume_once(
     poll_timeout_s: float,
     batch_size: int,
     transform_fns: Sequence[tuple[str, TransformFn]] = (),
+    broadcaster: Broadcaster | None = None,
 ) -> None:
     popped = await redis.blpop([INGEST_LIST], timeout=poll_timeout_s)
     if popped is None:
@@ -91,7 +102,7 @@ async def _consume_once(
         rest = await redis.lpop(INGEST_LIST, batch_size - 1)
         if rest:
             batch.extend(rest)
-    await _ingest_batch(redis, batch, transform_fns=transform_fns)
+    await _ingest_batch(redis, batch, transform_fns=transform_fns, broadcaster=broadcaster)
 
 
 async def _ingest_batch(
@@ -99,9 +110,11 @@ async def _ingest_batch(
     batch: list[bytes | str | int],
     *,
     transform_fns: Sequence[tuple[str, TransformFn]] = (),
+    broadcaster: Broadcaster | None = None,
 ) -> None:
     pipe = redis.pipeline(transaction=False)
     queued = 0
+    touched_hosts: set[str] = set()
     for raw in batch:
         if not isinstance(raw, bytes | str):
             # redis-py's stub allows int (shared with other commands'
@@ -117,8 +130,13 @@ async def _ingest_batch(
             for transformed in apply_transforms(record, list(transform_fns)):
                 queue_record(pipe, transformed)
                 queued += 1
+                touched_hosts.add(transformed.docker_host)
             continue
         queue_record(pipe, record)
         queued += 1
+        touched_hosts.add(record.docker_host)
     if queued:
         await pipe.execute()
+        if broadcaster is not None:
+            for docker_host in touched_hosts:
+                broadcaster.publish({"type": "update", "docker_host": docker_host})
