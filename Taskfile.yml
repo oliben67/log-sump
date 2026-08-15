@@ -11,9 +11,9 @@ tasks:
     silent: true
 
   sync:
-    desc: Install/sync the uv workspace (all packages + dev dependency group)
+    desc: Install/sync log-sump (+ dev dependency group)
     cmds:
-      - uv sync --all-packages --group dev
+      - uv sync --group dev
 
   lint:
     desc: Run ruff lint checks across the workspace
@@ -28,7 +28,7 @@ tasks:
   typecheck:
     desc: Run ty across the workspace
     cmds:
-      - uv run ty check packages
+      - uv run ty check src tests/common tests/listener tests/server
 
   test:
     desc: Run the full pytest suite (unit tests only, no Docker required)
@@ -58,16 +58,16 @@ tasks:
       - "{{.COMPOSE_DEV}} down -v"
 
   run:listener:
-    desc: Run log-sump-listener directly on the host (defaults to dev/config.dev.yaml; override with LOG_SUMP_CONFIG_FILE)
+    desc: Run log_sump.listener directly on the host (defaults to dev/config.dev.yaml; override with LOG_SUMP_CONFIG_FILE)
     env:
       LOG_SUMP_CONFIG_FILE: '{{.LOG_SUMP_CONFIG_FILE | default "dev/config.dev.yaml"}}'
     cmds:
-      - uv run --package log-sump-listener python -m log_sump_listener
+      - uv run python -m log_sump.listener
 
   run:server:
-    desc: Run log-sump-server directly on the host with autoreload
+    desc: Run log_sump.server directly on the host with autoreload
     cmds:
-      - uv run --package log-sump-server uvicorn log_sump_server.app:app --reload
+      - uv run uvicorn log_sump.server.app:app --reload
 
   docker:build:
     desc: Build the single-container product image

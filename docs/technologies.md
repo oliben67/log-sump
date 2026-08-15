@@ -10,15 +10,18 @@ subprocess I/O, Redis, and HTTP are all async-native. The one deliberate
 exception is `python-logstash-async`'s background-thread buffering (see
 below); dispatching *into* it is still non-blocking.
 
-## Workspace & packaging
+## Packaging
 
-- **[uv](https://docs.astral.sh/uv/)** — a single workspace
-  (`pyproject.toml` + `uv.lock`) across three packages
-  (`log-sump-common`/`-listener`/`-server`), so `log-listener` and
-  `log-server` each declare only the dependencies they actually need
-  (e.g. `python-logstash-async` vs. `fastapi`) while still sharing one lock
-  file and one `Record` schema via the `common` package.
-- **hatchling** — build backend for each workspace package.
+- **[uv](https://docs.astral.sh/uv/)** — one package (`pyproject.toml` +
+  `uv.lock`) with three subpackages, `log_sump.common` / `.listener` /
+  `.server`. Not split into separately-installable distributions: the
+  single-image build already installs everything into one shared venv for
+  all four supervised processes (`docker/Dockerfile`), so there's no
+  runtime dependency-isolation to gain from separate distributions —
+  `log_sump.listener` and `log_sump.server` just import what they need
+  from `log_sump.common` (config, `Record` schema, `Transport`, auth)
+  directly, as ordinary same-package imports.
+- **hatchling** — build backend for the `log_sump` package.
 
 ## Web framework
 
@@ -101,18 +104,19 @@ the identical listener code against a developer's own Docker socket.
 - **httpx** (`AsyncClient` + `ASGITransport`) — exercises `log-server`'s
   FastAPI app in-process over real HTTP semantics, without a running
   server process.
-- **`--import-mode=importlib`** (pytest) — each workspace package's
-  `tests/` directory shares the basename `tests`; the default import mode
-  requires globally-unique top-level module names and collides across
-  packages in that layout, so this project uses `importlib` mode instead,
-  which identifies modules by full path.
+- **`--import-mode=importlib`** (pytest) — `tests/{common,listener,server}/`
+  repeat test-file basenames across directories (e.g. both `listener/` and
+  `server/` have their own `test_app.py`); the default import mode requires
+  globally-unique top-level module names and collides on those, so this
+  project uses `importlib` mode instead, which identifies modules by full
+  path.
 
 ## Linting, formatting, type checking
 
 - **[ruff](https://docs.astral.sh/ruff/)** — lint + format, one config at
-  the workspace root.
+  the project root.
 - **[ty](https://docs.astral.sh/ty/)** (Astral) — static type checking
-  across the workspace.
+  across `src/` and `tests/`.
 
 ## Task running
 

@@ -13,11 +13,11 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /build
 COPY pyproject.toml uv.lock ./
-COPY packages packages
-# --no-editable: workspace members get installed as real packages, not
-# path references back into /build -- the venv is self-contained and
-# doesn't need the source tree alongside it at runtime.
-RUN uv sync --frozen --all-packages --no-dev --no-editable
+COPY src src
+# --no-editable: log-sump gets installed as a real package, not a path
+# reference back into /build -- the venv is self-contained and doesn't need
+# the source tree alongside it at runtime.
+RUN uv sync --frozen --no-dev --no-editable
 
 #############################################
 # Stage 2: runtime

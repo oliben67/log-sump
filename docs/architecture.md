@@ -61,7 +61,7 @@ former is the whole orchestrator process, the latter is one task per
 ### `log-listener` internal tasks
 
 All of these run as `asyncio` tasks in one event loop, per configured
-daemon. Source: `packages/log-sump-listener/src/log_sump_listener/`.
+daemon. Source: `src/log_sump/listener/`.
 
 - **`containers_listing.py`** — one task per daemon. Polls the equivalent
   of `docker ps` on an interval and publishes the current container set to
@@ -120,7 +120,7 @@ daemon. Source: `packages/log-sump-listener/src/log_sump_listener/`.
    list — not the enriched Logstash event, so nothing about Logstash's own
    envelope fields (`@timestamp`, `host`, `level`, ...) leaks into what
    `log-server` reads back.
-6. **Ingestion** (`log_sump_server/ingest/consumer.py`): a background task
+6. **Ingestion** (`log_sump.server.ingest.consumer`): a background task
    inside `log-server` drains that list (`BLPOP` + batched `LPOP`),
    validates each entry against the shared `Record` schema, and `XADD`s it
    into the correct per-daemon, per-kind Redis Stream. Malformed entries
@@ -128,7 +128,7 @@ daemon. Source: `packages/log-sump-listener/src/log_sump_listener/`.
    schema, drop malformed entries" requirement is actually implemented,
    once, in Python (Logstash's own filter only tags-and-drops on parse
    failure; it doesn't duplicate the schema check).
-7. **Retention** (`log_sump_server/ingest/trimmer.py`): a second background
+7. **Retention** (`log_sump.server.ingest.trimmer`): a second background
    task periodically `XTRIM`s each stream down to its kind's retention
    horizon.
 8. **Query**: `log-server`'s FastAPI app reads directly from the Streams —
@@ -137,7 +137,7 @@ daemon. Source: `packages/log-sump-listener/src/log_sump_listener/`.
 ## Record schema
 
 Every captured log line and every sampled metric becomes one of two
-`Record` variants (`packages/log-sump-common/src/log_sump_common/schema.py`),
+`Record` variants (`src/log_sump/common/schema.py`),
 discriminated by `kind`, sharing common identity fields so logs and metrics
 land contiguously on one per-daemon timeline:
 
@@ -194,7 +194,7 @@ The record's unique ID is the Redis Stream entry ID Redis assigns on
 
 Every command that reaches a daemon's host (`docker ps`, `docker logs -f`,
 `docker stats`, `docker system df`, `/proc` reads) goes through a
-`Transport` (`packages/log-sump-common/src/log_sump_common/transport.py`).
+`Transport` (`src/log_sump/common/transport.py`).
 The default is the Docker CLI reached over SSH
 (`ssh <user>@<host> docker ...`), run via `asyncio.create_subprocess_exec`
 so the event loop is never blocked; a `LocalTransport` (no `ssh` wrapper)
@@ -216,7 +216,7 @@ for local exec (which has no implicit shell at all).
 ## Auth model
 
 Two tiers, both backed by the same Redis-stored API-key mapping
-(`log_sump_common/auth.py`, `RedisApiKeyAuthBackend`):
+(`log_sump.common.auth`, `RedisApiKeyAuthBackend`):
 
 - **Daemon-scoped** (`/catalog`, `/records`): the key must map to a set of
   permitted `docker_host` values, and the specific daemon being queried
@@ -226,7 +226,7 @@ Two tiers, both backed by the same Redis-stored API-key mapping
   a daemon's records at all. Its safety comes from a fixed allowlist of
   read-only Redis commands (no writes, no `FLUSHALL`/`CONFIG`/`SHUTDOWN`,
   regardless of who's asking), documented in
-  `log_sump_server/redis_inspect.py` — not from a separate elevated
+  `log_sump.server.redis_inspect` — not from a separate elevated
   credential tier, which would add provisioning overhead without changing
   what a compromised key could actually do here.
 

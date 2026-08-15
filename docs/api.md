@@ -183,7 +183,7 @@ scoped by *command*, not by *credential tier*.
 | `command` | string | case-insensitive; must be in the allowlist below |
 | `args` | array of strings | passed through to Redis positionally |
 
-**Allowed commands** (`log_sump_server/redis_inspect.py`):
+**Allowed commands** (`log_sump.server.redis_inspect`):
 
 ```
 GET MGET EXISTS TYPE TTL PTTL STRLEN KEYS SCAN DBSIZE

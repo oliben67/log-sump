@@ -1,14 +1,20 @@
 [project]
-name = "log-sump-workspace"
+name = "log-sump"
 version = "0.1.0"
+description = "Async Docker-daemon log/metric collection, query API, and daemon catalog server"
 requires-python = ">=3.12"
-dependencies = []
-
-[tool.uv]
-package = false
-
-[tool.uv.workspace]
-members = ["packages/*"]
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "redis>=5.2",
+    "structlog>=24.4",
+    "python-logstash-async>=2.7",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.9",  # required by FastAPI's UploadFile (POST /files/upload)
+    "croniter>=6.0",  # scheduling.py (Phase 4) -- same as cttc's own server.py dependency
+]
 
 [dependency-groups]
 dev = [
@@ -21,6 +27,13 @@ dev = [
     "ty>=0.0.71",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/log_sump"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -30,14 +43,15 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["packages"]
-# Each package's tests/ directory shares the basename "tests" (and each is a
-# package thanks to tests/__init__.py, so relative imports like
-# `from .conftest import ...` work within a package). The default "prepend"
-# import mode requires globally-unique top-level module names and collides
-# across packages in that setup; importlib mode identifies modules by full
-# path instead, which is what actually resolves it.
-addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
+# tests/{common,listener,server}/ share test-file basenames across
+# directories (e.g. both listener/ and server/ have their own test_app.py),
+# and each is a package via its own __init__.py so relative imports like
+# `from .conftest import ...` work within it. The default "prepend" import
+# mode requires globally-unique top-level module names and collides on
+# those repeated basenames; importlib mode identifies modules by full path
+# instead, which is what actually resolves it.
+addopts = ["--import-mode=importlib", "-m", "not integration"]
 markers = [
     "integration: exercises a real Redis via docker-compose.dev.yml (`task dev:up` first); excluded from the default `task test` run",
 ]

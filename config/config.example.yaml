@@ -1,5 +1,5 @@
 # Copy this to config/config.yaml (gitignored) and edit before running
-# `task compose:up` / `docker compose up`. See log_sump_common.config for
+# `task compose:up` / `docker compose up`. See log_sump.common.config for
 # every field, defaults, and the LOG_SUMP_* env var override for each.
 
 daemons:

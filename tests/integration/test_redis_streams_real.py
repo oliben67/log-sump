@@ -4,7 +4,7 @@ Redis (via `docker-compose.dev.yml`) rather than `fakeredis`.
 Worth having as a real, separate tier: `fakeredis`'s async client has at
 least one confirmed bug (cancelling a task blocked inside `BLPOP` wipes its
 entire in-memory dataset, even unrelated keys — see the note in
-`packages/log-sump-server/tests/test_consumer.py`), so the unit-test tier
+`tests/server/test_consumer.py`), so the unit-test tier
 alone doesn't prove `XADD`/`XRANGE`/`XTRIM MINID` behave correctly against
 genuine Redis semantics.
 
@@ -18,11 +18,12 @@ import contextlib
 import time
 
 import pytest
-from log_sump_common.redis_keys import INGEST_LIST, stream_key
-from log_sump_common.schema import Kind
-from log_sump_server.ingest.consumer import run_consumer
-from log_sump_server.ingest.trimmer import _trim_once
 from redis.asyncio import Redis
+
+from log_sump.common.redis_keys import INGEST_LIST, stream_key
+from log_sump.common.schema import Kind
+from log_sump.server.ingest.consumer import run_consumer
+from log_sump.server.ingest.trimmer import _trim_once
 
 pytestmark = pytest.mark.integration
 

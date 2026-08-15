@@ -25,7 +25,7 @@ Prerequisites: [Docker](https://www.docker.com/), [uv](https://docs.astral.sh/uv
 [`Taskfile.yml`](Taskfile.yml) for the plain `uv run ...` equivalents).
 
 ```bash
-task sync              # install the uv workspace (all packages + dev deps)
+task sync              # install log-sump + dev deps
 cp config/config.example.yaml config/config.yaml
 $EDITOR config/config.yaml   # add the daemon(s) you want to watch
 ```
@@ -59,13 +59,15 @@ task check             # lint + typecheck + test
 ## Project layout
 
 ```
-packages/
-  log-sump-common/     # shared: config, Record schema, Transport, Redis keys, auth
-  log-sump-listener/   # discovers containers, streams logs + metrics
-  log-sump-server/     # query API, catalog, Redis Streams ingestion + retention
-logstash/              # Logstash pipeline config
-supervisor/s6-rc.d/    # s6-overlay service definitions (the 4 supervised processes)
-docker/Dockerfile      # multi-stage build for the single-container image
-config/                # config.example.yaml template (config.yaml is gitignored)
-tests/integration/     # tests that exercise a real Redis
+src/log_sump/
+  common/               # shared: config, Record schema, Transport, Redis keys, auth
+  listener/             # discovers containers, streams logs + metrics
+  server/               # query API, catalog, Redis Streams ingestion + retention
+tests/
+  common/ listener/ server/   # unit tests, mirroring src/log_sump/
+  integration/          # tests that exercise a real Redis
+logstash/               # Logstash pipeline config
+supervisor/s6-rc.d/     # s6-overlay service definitions (the 4 supervised processes)
+docker/Dockerfile       # multi-stage build for the single-container image
+config/                 # config.example.yaml template (config.yaml is gitignored)
 ```
