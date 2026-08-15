@@ -17,6 +17,7 @@ from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from redis.asyncio import Redis
 
 from log_sump.common.auth import GatewayTokenAuthBackend, RedisApiKeyAuthBackend
@@ -25,7 +26,7 @@ from log_sump.common.config import Settings, load_settings
 from .broadcast import Broadcaster
 from .buffers import BufferManager
 from .events import EventManager
-from .ingest.consumer import run_consumer
+from .ingest.consumer import POLL_TIMEOUT_S, run_consumer
 from .ingest.trimmer import run_trimmer
 from .plugins import load_plugin_routers
 from .routers import admin, catalog, daemons, files, gateway, health, records, series
@@ -91,7 +92,15 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nonlocal redis
         if redis is None:
-            redis = Redis.from_url(settings.redis.url)
+            # socket_timeout must exceed POLL_TIMEOUT_S: this client is
+            # shared with run_consumer's BLPOP below, and redis-py's own
+            # default socket_timeout (5s) is <= a 5s BLPOP wait, so the
+            # client-side read timeout was racing the server-side BLPOP
+            # timeout and usually losing -- confirmed by booting a real
+            # container and watching every idle poll cycle log a spurious
+            # "Timeout reading from ..." instead of BLPOP's normal, quiet
+            # "nothing arrived" nil reply.
+            redis = Redis.from_url(settings.redis.url, socket_timeout=POLL_TIMEOUT_S + 15.0)
         app.state.settings = settings
         app.state.redis = redis
         app.state.auth_backend = RedisApiKeyAuthBackend(redis)
@@ -166,8 +175,39 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(live_router.router)
     app.include_router(gateway.router)
     if settings.plugins.directory:
-        for _name, plugin_router in load_plugin_routers(Path(settings.plugins.directory)):
+        # A plugin is additive-only: it must never be able to make one of
+        # log-sump's own advertised routes unreachable just by declaring a
+        # route at the same (path, method) -- FastAPI resolves overlapping
+        # routes in registration order, so a same-path plugin route
+        # registered after the built-in ones above would otherwise shadow
+        # them silently (confirmed the hard way: a plugin reproducing a
+        # legacy client's own `/point`/`/index_at`/`/ticks`/`/series`/
+        # `/logs/find` paths -- names log-sump's own Phase-1 `series`
+        # router already used first -- made those built-in routes
+        # unreachable until this check caught it). A colliding plugin is
+        # rejected whole (not partially mounted), same tolerance as an
+        # unloadable one below.
+        known_routes = {
+            (route.path, method)
+            for route in app.routes
+            if isinstance(route, APIRoute)
+            for method in route.methods or ()
+        }
+        for name, plugin_router in load_plugin_routers(Path(settings.plugins.directory)):
+            plugin_routes = {
+                (route.path, method)
+                for route in plugin_router.routes
+                if isinstance(route, APIRoute)
+                for method in route.methods or ()
+            }
+            conflicts = plugin_routes & known_routes
+            if conflicts:
+                logger.error(
+                    "plugins.route_conflict", plugin=name, conflicts=sorted(conflicts)
+                )
+                continue
             app.include_router(plugin_router)
+            known_routes |= plugin_routes
     return app
 
 

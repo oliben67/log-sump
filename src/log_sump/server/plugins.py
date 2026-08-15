@@ -61,6 +61,20 @@ def load_plugin_routers(directory: Path) -> list[tuple[str, APIRouter]]:
 
 def _load_plugin_router(name: str, init_file: Path, package_dir: Path) -> APIRouter | None:
     module_name = f"log_sump_plugin_{name}"
+    # A second load under the same name (e.g. a test process calling
+    # create_app() more than once) must not silently reuse a submodule
+    # left over from the first one: Python's relative-import resolution
+    # (the plugin's own `from . import routes`, `from . import compat`,
+    # ...) checks sys.modules by dotted name before re-executing anything,
+    # and only the top-level entry gets overwritten below -- so a plugin
+    # with its own in-process state in a submodule would otherwise carry
+    # that state across what looks, from the plugin's own code, like a
+    # fresh load. Confirmed the hard way by a plugin's own test suite
+    # (legacy_gateway_api's log_index.py, a per-request rank cache) that
+    # calls create_app() once per test in one process.
+    stale = [n for n in sys.modules if n == module_name or n.startswith(module_name + ".")]
+    for n in stale:
+        del sys.modules[n]
     spec = importlib.util.spec_from_file_location(
         module_name, init_file, submodule_search_locations=[str(package_dir)]
     )

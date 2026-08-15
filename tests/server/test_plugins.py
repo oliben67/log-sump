@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from fakeredis import FakeAsyncRedis
-from fastapi import APIRouter
+from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from log_sump.common.config import PluginsConfig, Settings
@@ -47,6 +47,40 @@ BROKEN_PLUGIN_INIT = """raise RuntimeError("boom")
 
 NOT_A_ROUTER_PLUGIN_INIT = """router = "not actually an APIRouter"
 """
+
+#: Collides with the built-in health router's own GET /health/live --
+#: exercises the mount-time conflict check, not load_plugin_routers itself
+#: (which has no idea what's already mounted).
+CONFLICTING_PLUGIN_INIT = '''from fastapi import APIRouter
+
+router = APIRouter()
+
+
+@router.get("/health/live")
+async def fake_health():
+    return {"status": "not the real one"}
+'''
+
+
+#: A submodule holding module-level mutable state, the way a real plugin's
+#: own in-process cache would (see legacy_gateway_api's log_index.py) --
+#: `/bump` appends and returns the running count, so a test can tell
+#: whether a second load actually re-executed this submodule fresh or
+#: reused whatever `sys.modules` already had cached from the first load.
+STATEFUL_PLUGIN_INIT = """from .state import router
+"""
+
+STATEFUL_PLUGIN_STATE = '''from fastapi import APIRouter
+
+router = APIRouter()
+calls: list[int] = []
+
+
+@router.get("/bump")
+async def bump():
+    calls.append(1)
+    return {"count": len(calls)}
+'''
 
 
 def _write_plugin(directory: Path, name: str, init_source: str) -> Path:
@@ -164,3 +198,73 @@ async def test_create_app_with_no_plugins_directory_configured_mounts_nothing_ex
             resp = await ac.get("/plugin-ping")
 
     assert resp.status_code == 404
+
+
+async def test_a_plugin_route_colliding_with_a_built_in_route_is_rejected(
+    tmp_path: Path, redis: FakeAsyncRedis
+) -> None:
+    """A plugin must be additive-only: it can never make one of log-sump's
+    own routes unreachable just by declaring a route at the same path --
+    confirmed the hard way (see app.py's own comment) when a real plugin's
+    legacy-compat routes shadowed log-sump's built-in `series` router.
+    """
+    _write_plugin(tmp_path, "conflicting", CONFLICTING_PLUGIN_INIT)
+    settings = Settings(plugins=PluginsConfig(directory=str(tmp_path)))
+    app = create_app(settings=settings, redis=redis)
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/health/live")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}  # the real one, not the plugin's fake
+
+
+async def test_a_non_conflicting_plugin_still_mounts_alongside_a_rejected_one(
+    tmp_path: Path, redis: FakeAsyncRedis
+) -> None:
+    _write_plugin(tmp_path, "conflicting", CONFLICTING_PLUGIN_INIT)
+    _write_plugin(tmp_path, "healthy", SIMPLE_PLUGIN_INIT)
+    settings = Settings(plugins=PluginsConfig(directory=str(tmp_path)))
+    app = create_app(settings=settings, redis=redis)
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/plugin-ping")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+async def test_reloading_the_same_plugin_does_not_carry_over_submodule_state(
+    tmp_path: Path,
+) -> None:
+    """A second `load_plugin_routers` call for the same plugin name (e.g.
+    a process that calls `create_app()` more than once -- ordinary in a
+    test suite, not just hypothetical) must genuinely re-execute the
+    plugin fresh, not silently keep serving a submodule cached in
+    `sys.modules` from the first load. Regression test for exactly the
+    bug `_load_plugin_router`'s own comment describes.
+    """
+    plugin_dir = _write_plugin(tmp_path, "stateful", STATEFUL_PLUGIN_INIT)
+    (plugin_dir / "state.py").write_text(STATEFUL_PLUGIN_STATE)
+
+    _name1, router1 = load_plugin_routers(tmp_path)[0]
+    _name2, router2 = load_plugin_routers(tmp_path)[0]
+
+    assert router1 is not router2  # genuinely reloaded, not the same cached router
+    app1 = FastAPI()
+    app1.include_router(router1)
+    app2 = FastAPI()
+    app2.include_router(router2)
+    async with (
+        AsyncClient(transport=ASGITransport(app=app1), base_url="http://test") as ac1,
+        AsyncClient(transport=ASGITransport(app=app2), base_url="http://test") as ac2,
+    ):
+        first_app_count = (await ac1.get("/bump")).json()["count"]
+        second_app_count = (await ac2.get("/bump")).json()["count"]
+
+    assert first_app_count == 1
+    assert second_app_count == 1  # not 2 -- the second load's own `calls` list starts empty
