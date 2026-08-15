@@ -176,6 +176,12 @@ async def run_daemon(
                     records_logger,
                     stats_interval_s=settings.listener.effective_system_stats_interval_s(),
                     system_metrics_source=settings.metrics.system_metrics_source,
+                    # local_proc_root only ever applies to transport: local
+                    # -- an SSH-reached daemon's /proc read runs on *that*
+                    # remote machine, always at the literal /proc.
+                    proc_root=settings.listener.local_proc_root
+                    if daemon.transport == "local"
+                    else "/proc",
                 )
             )
     await asyncio.gather(*tasks)

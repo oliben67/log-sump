@@ -1,3 +1,12 @@
 #!/command/execlineb -P
+# with-contenv: without it, s6-overlay does NOT propagate the container's
+# own environment (docker run -e / compose `environment:`) into a
+# supervised service's process at all -- it's only ever snapshotted to
+# /run/s6/container_environment/, not inherited by default. Every
+# LOG_SUMP_* env var override (config.py's env_prefix) silently no-ops
+# without this, confirmed the hard way: LOG_SUMP_SERVER__BIND_PORT reached
+# `docker exec`'s own shell (which inherits the container's PID-1
+# environment directly) but not this service's actual process.
+with-contenv
 fdmove -c 2 1
 exec python -m log_sump.server

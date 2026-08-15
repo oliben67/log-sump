@@ -50,12 +50,19 @@ _MARKER_MEMINFO = "===MEMINFO==="
 _MARKER_NETDEV = "===NETDEV==="
 _MARKER_DISKSTATS = "===DISKSTATS==="
 
-_PROC_READ_SCRIPT = (
-    f"echo {_MARKER_STAT}; cat /proc/stat; "
-    f"echo {_MARKER_MEMINFO}; cat /proc/meminfo; "
-    f"echo {_MARKER_NETDEV}; cat /proc/net/dev; "
-    f"echo {_MARKER_DISKSTATS}; cat /proc/diskstats"
-)
+def _proc_read_script(proc_root: str) -> str:
+    """`proc_root` is `/proc` for every SSH-reached daemon (this script runs
+    on *that* remote machine, where `/proc` is always correct) -- it's only
+    ever something else for a `transport: local` daemon whose listener
+    process itself runs without a container-local PID namespace to see the
+    true host `/proc` through (see `ListenerConfig.local_proc_root`).
+    """
+    return (
+        f"echo {_MARKER_STAT}; cat {proc_root}/stat; "
+        f"echo {_MARKER_MEMINFO}; cat {proc_root}/meminfo; "
+        f"echo {_MARKER_NETDEV}; cat {proc_root}/net/dev; "
+        f"echo {_MARKER_DISKSTATS}; cat {proc_root}/diskstats"
+    )
 
 # Common partition-naming schemes to exclude when summing /proc/diskstats,
 # so whole-device and partition entries aren't double-counted. Best-effort:
@@ -78,6 +85,7 @@ async def run_system_stats(
     *,
     stats_interval_s: float,
     system_metrics_source: str,
+    proc_root: str = "/proc",
 ) -> None:
     seq_counter = itertools.count(1)
     prev_cpu: _CpuSample | None = None
@@ -87,7 +95,7 @@ async def run_system_stats(
         host_metrics: dict[str, float | int | None] = {}
         source = "docker system df"
         if system_metrics_source == "proc":
-            sampled = await _try_sample_proc(docker_host, transport)
+            sampled = await _try_sample_proc(docker_host, transport, proc_root)
             if sampled is not None:
                 host_metrics, cpu_sample = sampled
                 if prev_cpu is not None:
@@ -173,10 +181,10 @@ def _parse_reclaimable(text: str) -> int | None:
 
 
 async def _try_sample_proc(
-    docker_host: str, transport: Transport
+    docker_host: str, transport: Transport, proc_root: str
 ) -> tuple[dict[str, float | int | None], _CpuSample] | None:
     try:
-        result = await transport.run_shell(_PROC_READ_SCRIPT)
+        result = await transport.run_shell(_proc_read_script(proc_root))
         result.check()
         sections = _split_proc_sections(result.stdout)
         cpu = _parse_cpu_total_idle(sections.get(_MARKER_STAT, ""))

@@ -48,6 +48,20 @@ class ListenerConfig(BaseModel):
     #: adding a daemon isn't as latency-sensitive as discovering a new
     #: container on an already-watched one.
     daemon_registry_poll_interval_s: float = 5.0
+    #: Where `system_stats.py` reads host `/proc` files from, for
+    #: `transport: local` daemons only (an SSH-reached daemon's `/proc`
+    #: read runs on *that* remote machine, always at the literal `/proc` --
+    #: this setting never applies there). Matters when this process itself
+    #: runs containerized (spec §3.2's four-process image) without a
+    #: container-local PID namespace of its own to see the true host
+    #: through: a process-supervisor-owning container can't use
+    #: `pid: host` (its PID-1 requirement conflicts with sharing the
+    #: host's PID namespace), so accurate host-wide `/proc` visibility has
+    #: to come from a plain bind mount instead (matching cttc's own
+    #: `docker-compose.yml`, and the same pattern `node_exporter`/
+    #: `cAdvisor` use) -- override to wherever that mount lands, e.g.
+    #: `/host/proc`.
+    local_proc_root: str = "/proc"
 
     def effective_system_stats_interval_s(self) -> float:
         return self.system_stats_interval_s or self.stats_interval_s

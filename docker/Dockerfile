@@ -27,6 +27,7 @@ FROM python:3.12-slim AS runtime
 ARG TARGETARCH
 ARG S6_OVERLAY_VERSION=3.2.3.2
 ARG LOGSTASH_VERSION=8.15.3
+ARG DOCKER_CLI_VERSION=27.3.1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -36,6 +37,39 @@ RUN apt-get update \
         xz-utils \
         curl \
     && rm -rf /var/lib/apt/lists/*
+
+# docker CLI only (not the full engine -- this container never runs its own
+# dockerd): LocalTransport (transport.py) shells out to a plain `docker`
+# binary with no daemon-connection flags at all, so for the embedded "This
+# machine" gateway target to see the *host's* containers, this image needs
+# the CLI on PATH talking to the host's daemon over a mounted
+# /var/run/docker.sock (see releases/_shared/docker-compose.yml in the
+# parent cttc repo). The static binary (not an apt package) avoids adding
+# Docker's own apt repo/signing key just for one binary -- same approach,
+# same pinned version, as cttc's own now-superseded app/server/Dockerfile.
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) DOCKER_ARCH=x86_64 ;; \
+        arm64) DOCKER_ARCH=aarch64 ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" \
+        | tar -xz --strip-components=1 -C /usr/local/bin docker/docker; \
+    docker --version
+
+# `ssh <user>@<host> docker ...` (SSHTransport) execs plain ssh with no
+# flags of its own, so without this it either hangs on an interactive
+# host-key prompt (no tty/stdin available to a subprocess) or fails outright
+# on first contact with a daemon just added at runtime (POST /daemons).
+# accept-new is TOFU-on-first-connection, same trust model most people
+# already accept from an interactive `ssh` the first time; it still detects
+# a *changed* key later, unlike StrictHostKeyChecking no/UserKnownHostsFile=
+# /dev/null. Container filesystem is ephemeral, so this effectively
+# re-TOFUs every container restart -- acceptable since restarts are an
+# operator action, not something reachable by whatever's on the other end
+# of the ssh connection. Matches app/server/Dockerfile's identical setup.
+RUN mkdir -p /etc/ssh/ssh_config.d && printf 'Host *\n  StrictHostKeyChecking accept-new\n' \
+    > /etc/ssh/ssh_config.d/99-cttc-accept-new.conf
 
 # --- s6-overlay (process supervisor, spec §3.2) ---
 RUN set -eux; \
@@ -85,7 +119,12 @@ RUN mkdir -p /data
 VOLUME ["/data"]
 EXPOSE 8080
 
+# ${LOG_SUMP_SERVER__BIND_PORT:-8080}, not a bare 8080: a deployment that
+# overrides the bind port (see config.py's env_prefix) still needs this to
+# probe the port log-server is actually listening on -- confirmed the hard
+# way against a real 8765 override, without this HEALTHCHECK always
+# reported unhealthy despite the app itself being up and correctly bound.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/health/live || exit 1
+    CMD curl -fsS http://127.0.0.1:${LOG_SUMP_SERVER__BIND_PORT:-8080}/health/live || exit 1
 
 ENTRYPOINT ["/init"]

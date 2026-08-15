@@ -1,3 +1,7 @@
 #!/command/execlineb -P
+# with-contenv: see log-server/run's identical comment -- without it, this
+# service's process never sees LOG_SUMP_* env var overrides (config.py's
+# env_prefix) at all, only the container's own PID-1 process does.
+with-contenv
 fdmove -c 2 1
 exec python -m log_sump.listener
