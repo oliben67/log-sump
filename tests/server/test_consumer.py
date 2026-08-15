@@ -134,7 +134,8 @@ async def test_consumer_applies_transform_fns_to_log_records_only() -> None:
     assert isinstance(log_record, LogRecord)
     assert log_record.message == "HELLO"  # transformed
     metric_entries = streams[stream_key("daemon-a", Kind.METRIC)]
-    assert len(metric_entries) == 1  # untouched -- transforms are log-only, matching cttc
+    # untouched -- transforms are log-only, same as the prior gateway implementation
+    assert len(metric_entries) == 1
 
 
 async def test_consumer_publishes_one_update_event_per_touched_docker_host() -> None:

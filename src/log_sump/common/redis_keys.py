@@ -46,24 +46,24 @@ def session_data_key(session_id: str) -> str:
     """A completed recording session's archive bytes (migration plan
     Phase 4, `sessions.py`) -- kept in Redis rather than log-server's own
     (not guaranteed persistent) local disk, with a TTL matching the
-    session's own retention. `_sessions`' status/metadata bookkeeping stays
-    in-process only, same as cttc's own session dict -- only the archive
-    payload itself needs to survive here.
+    session's own retention. `_sessions`' status/metadata bookkeeping
+    stays in-process only -- only the archive payload itself needs to
+    survive here.
     """
     return f"{_PREFIX}:session:{session_id}:data"
 
 
 def gateway_ownership_key() -> str:
-    """This gateway's ownership record (migration plan Phase 7, `gateway_mesh.py`)
-    -- who claimed it, for admin-action signature verification. One record
-    per gateway process, same as cttc's own `cttc:gateway:ownership`.
+    """This gateway's ownership record (migration plan Phase 7,
+    `gateway_mesh.py`) -- who claimed it, for admin-action signature
+    verification. One record per gateway process.
     """
     return f"{_PREFIX}:gateway:ownership"
 
 
 def gateway_nonce_key(nonce: str) -> str:
     """A short-lived, single-use admin-action challenge (migration plan
-    Phase 7) -- matches cttc's own `cttc:gateway:nonce:{nonce}`.
+    Phase 7).
     """
     return f"{_PREFIX}:gateway:nonce:{nonce}"
 
@@ -71,8 +71,7 @@ def gateway_nonce_key(nonce: str) -> str:
 def gateway_list_key() -> str:
     """This gateway's peer-discovery list (migration plan Phase 7,
     `gateway_mesh.py`) -- a single JSON blob keyed by each peer's own
-    canonical `lower(host):port` string, matching cttc's own
-    `cttc:gateway:list`.
+    canonical `lower(host):port` string.
     """
     return f"{_PREFIX}:gateway:list"
 

@@ -39,11 +39,11 @@ class DaemonConfig(BaseModel):
     #: per-container stats sampling (`container_stats.py`) to containers
     #: whose name is in it -- an empty list is a valid, different state
     #: from `None`: "registered, watching nothing yet," e.g. right after a
-    #: client adds a daemon before picking any containers. Matches cttc's
-    #: own `docker://<host>/container/<name>` addressing, which was always
-    #: by name, not id. Swarm *services* aren't covered by this (log-sump
-    #: has no per-service log tailing at all yet, unlike cttc's own
-    #: ttype: "service" sources -- services_listing.py is discovery-only).
+    #: client adds a daemon before picking any containers. Addressed by
+    #: name, not id, matching how a client would typically reference a
+    #: container it already knows about. Swarm *services* aren't covered
+    #: by this (log-sump has no per-service log tailing at all yet --
+    #: services_listing.py is discovery-only).
     watched_containers: list[str] | None = None
 
 
@@ -70,10 +70,9 @@ class ListenerConfig(BaseModel):
     #: through: a process-supervisor-owning container can't use
     #: `pid: host` (its PID-1 requirement conflicts with sharing the
     #: host's PID namespace), so accurate host-wide `/proc` visibility has
-    #: to come from a plain bind mount instead (matching cttc's own
-    #: `docker-compose.yml`, and the same pattern `node_exporter`/
-    #: `cAdvisor` use) -- override to wherever that mount lands, e.g.
-    #: `/host/proc`.
+    #: to come from a plain bind mount instead (the same pattern
+    #: `node_exporter`/`cAdvisor` use) -- override to wherever that mount
+    #: lands, e.g. `/host/proc`.
     local_proc_root: str = "/proc"
 
     def effective_system_stats_interval_s(self) -> float:
@@ -133,17 +132,16 @@ class ServerConfig(BaseModel):
 
 
 class TransformsConfig(BaseModel):
-    """User transform plugins (migration plan Phase 5) -- log-only,
-    matching cttc's own `TransformRegistry`. `directory` unset (the
-    default) disables transforms entirely: no directory to scan, nothing
-    applied.
+    """User transform plugins (migration plan Phase 5) -- log-only.
+    `directory` unset (the default) disables transforms entirely: no
+    directory to scan, nothing applied.
     """
 
     directory: str | None = None
     #: Names loaded and applied, in order, to every live-collected
-    #: LogRecord (see ingest/consumer.py). Unlike cttc (which selects
-    #: transforms per opened source), this is a single global list --
-    #: per-daemon selection is a documented simplification for this pass.
+    #: LogRecord (see ingest/consumer.py). A single global list, not
+    #: selected per daemon -- per-daemon selection is a documented
+    #: simplification for this pass.
     active: list[str] = Field(default_factory=list)
 
 
@@ -160,15 +158,10 @@ class PluginsConfig(BaseModel):
 
 
 class GatewayConfig(BaseModel):
-    """Gateway-mesh + admin-auth tunables (migration plan Phase 7) --
-    cttc's own equivalents (`CTTC_API_TOKEN`, `PUBLIC_ADDRESS`/
-    `ADVERTISED_HOST_PORT`, `ADMIN_NONCE_TTL_SECONDS`, `GATEWAY_LIST_MAX_ENTRIES`)
-    are a mix of argparse flags and raw (unprefixed) env vars read directly
-    by `server.py`'s own `main()` -- log-sump has no argparse-based CLI at
-    all, so these become ordinary `Settings` fields instead, under the
-    standard `LOG_SUMP_GATEWAY__*` env var namespace. A later phase's
-    Electron integration (main.js) needs to set `LOG_SUMP_GATEWAY__TOKEN`
-    (not `CTTC_API_TOKEN`) when it starts driving this process.
+    """Gateway-mesh + admin-auth tunables (migration plan Phase 7). Plain
+    `Settings` fields, under the standard `LOG_SUMP_GATEWAY__*` env var
+    namespace, rather than argparse flags or raw unprefixed env vars --
+    log-sump has no argparse-based CLI at all.
     """
 
     #: Shared secret required (as the `X-CTTC-Token` header, or a `?token=`
@@ -176,14 +169,22 @@ class GatewayConfig(BaseModel):
     #: set a custom header) on every gateway-mesh/admin route when set.
     #: Unset (the default) leaves those routes exactly as unauthenticated
     #: as an embedded, never-network-reachable "This machine" gateway
-    #: already is -- matches cttc's own `_require_api_token` semantics.
+    #: already is.
     token: str | None = None
     #: Overrides the inferred self-address (`Host` header) used for this
-    #: gateway's own entry in the peer-discovery list -- matches cttc's
-    #: `PUBLIC_ADDRESS`/`ADVERTISED_HOST_PORT` env override.
+    #: gateway's own entry in the peer-discovery list.
     public_address: str | None = None
     admin_nonce_ttl_seconds: float = 120.0
     gateway_list_max_entries: int = 500
+    #: The image name `GET /mlog` matches against `docker ps` output to
+    #: find the container this gateway process itself is running in, so it
+    #: can bundle its own logs alongside a client's ("Ship Logs"). Unset
+    #: (the default) disables that lookup entirely -- there's no way to
+    #: reliably identify "this process's own container" without being told
+    #: what image it runs under, and log-sump has no deployment-agnostic
+    #: way to guess. A deployment that builds and runs its own image under
+    #: a fixed name sets this to that name.
+    own_container_image_name: str | None = None
 
 
 class Settings(BaseSettings):

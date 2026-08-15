@@ -1,33 +1,34 @@
 """Recording sessions (migration plan Phase 4): on-demand or scheduler-
 triggered captures that accumulate server-side and are collected by the
-client afterward. Direct translation of cttc's own recording_session.py --
-same "Redis already retains it, a session is just bookkeeping" design (see
-that module's own docstring), scoped to one `docker_host` (log-sump's own
-addressing unit) instead of an arbitrary set of "currently open sources"
-(cttc's own concept, with no equivalent here: a daemon's Streams already
-cover everything on it, so there's no separate source-id snapshot to keep
-track of at all).
+client afterward. Ported from a prior gateway implementation's own
+recording_session.py -- same "Redis already retains it, a session is just
+bookkeeping" design (see that module's own docstring), scoped to one
+`docker_host` (log-sump's own addressing unit) instead of an arbitrary set
+of "currently open sources" (that prior implementation's own concept, with
+no equivalent here: a daemon's Streams already cover everything on it, so
+there's no separate source-id snapshot to keep track of at all).
 
 A session ends either by an explicit `stop()` call or once its planned
 `duration_minutes` elapses (checked by `tick()`, a background task
 alongside the ingestion consumer/trimmer in `app.py`'s lifespan).
 
-Its completed archive (`cttc_archive.write_archive`) is stored in Redis
-(`redis_keys.session_data_key`), not on local disk the way cttc's own
-`sessions_dir` is -- log-server has no guaranteed persistent filesystem
-across a restart the way the embedded gateway's own disk does, and Redis
-is already this system's durable store for everything else. Only a
-session's status/metadata bookkeeping stays in-process (matches cttc's own
-single-process `_sessions` dict); unlike cttc, this module doesn't reclaim
-orphaned archives after a restart -- a completed-but-undownloaded session's
-data blob still exists in Redis until its own TTL, but its status becomes
+Its completed archive (`sample_archive.write_archive`) is stored in Redis
+(`redis_keys.session_data_key`), not on local disk the way that prior
+implementation's own `sessions_dir` was -- log-server has no guaranteed
+persistent filesystem across a restart the way the embedded gateway's own
+disk does, and Redis is already this system's durable store for
+everything else. Only a session's status/metadata bookkeeping stays
+in-process (matching that prior implementation's own single-process
+`_sessions` dict); unlike it, this module doesn't reclaim orphaned
+archives after a restart -- a completed-but-undownloaded session's data
+blob still exists in Redis until its own TTL, but its status becomes
 unreachable once `_sessions` is gone. A smaller gap than it sounds: the
 underlying Streams data a session was built from is untouched either way,
 so nothing is actually lost, only that one convenience view of it.
 
 Retention: completed sessions are erased `default_ttl_seconds` after they
-finish (24h, matches cttc's own default), except sessions marked `safe`,
-kept for their own `max_keep_seconds` instead.
+finish (24h, matching that prior implementation's own default), except
+sessions marked `safe`, kept for their own `max_keep_seconds` instead.
 """
 
 from __future__ import annotations
@@ -39,8 +40,8 @@ from datetime import UTC, datetime
 import structlog
 from redis.asyncio import Redis
 
-from log_sump.common.cttc_archive import write_archive
 from log_sump.common.redis_keys import session_data_key
+from log_sump.common.sample_archive import write_archive
 
 from .queries import export_window
 
@@ -109,8 +110,9 @@ class SessionManager:
         rolling buffer's own `snapshot()` slice rather than from a session
         that ran on this manager's own clock. Gets the same id space,
         `download()`/`status_of()` access, and TTL handling as an ordinary
-        session. Unlike cttc's own synchronous version (which just writes a
-        local file), this is `async`: storing into Redis needs it.
+        session. Unlike a prior gateway implementation's own synchronous
+        version (which just writes a local file), this is `async`: storing
+        into Redis needs it.
         """
         sid = f"rec{self._next_id}"
         self._next_id += 1
@@ -121,7 +123,7 @@ class SessionManager:
         await self._redis.set(session_data_key(sid), data, ex=max(1, int(ttl_seconds)))
         self._sessions[sid] = RecordingSession(
             id=sid,
-            docker_host="",  # meaningless here, matches cttc's own empty source_ids placeholder
+            docker_host="",  # meaningless here, an empty placeholder like the field elsewhere
             start_ts=now,
             duration_minutes=None,
             safe=safe,

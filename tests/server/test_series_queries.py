@@ -1,7 +1,7 @@
 """Phase 1 of the server migration: point/index_at/ticks/bucketed/find_text
-in queries.py -- timeline queries the cttc scrubbing UI needs on top of
+in queries.py -- timeline queries a scrubbing UI client needs on top of
 log-sump's existing per-daemon Streams. See the plan's Phase 1 for the
-cttc equivalents each of these replaces.
+prior gateway implementation's own equivalents each of these replaces.
 """
 
 import json

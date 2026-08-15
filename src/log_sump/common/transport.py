@@ -191,7 +191,7 @@ class LocalTransport(Transport):
     Used for `transport: local` daemons so the exact same registry/tracker/
     listener/stats code paths run against a Docker socket already on this
     machine, with no SSH setup required. Originally added for local dev/
-    tests; now also the supported choice for cttc's embedded "This machine"
+    tests; now also the supported choice for an embedded "This machine"
     gateway target (migration plan Phase 3) — no code changed to get there,
     once Phases 1/2 had exercised every code path this transport also
     exercises against the same production query/ingestion surface.

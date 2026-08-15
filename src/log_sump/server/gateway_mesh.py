@@ -1,8 +1,8 @@
 """Gateway ownership + peer-discovery mesh (migration plan Phase 7) --
-direct translation of cttc's own `redis_log.py` ownership/nonce/gateway-list
-methods and `server.py`'s mesh section, kept in one module the way cttc kept
-them in one file: this is all one feature (br-OWNER-00x/br-MESH-00x), not
-several.
+ported from a prior gateway implementation's own `redis_log.py`
+ownership/nonce/gateway-list methods and `server.py`'s mesh section, kept
+in one module the way that implementation kept them in one file: this is
+all one feature (br-OWNER-00x/br-MESH-00x), not several.
 
 Ownership is the trust anchor every admin-tier action checks against
 (`require_owner_signature`, used by `routers.gateway`'s
@@ -35,13 +35,6 @@ except importlib.metadata.PackageNotFoundError:
     # Not installed as a package in every deployment mode -- /ping still
     # needs to answer with something rather than raise.
     GATEWAY_VERSION = "0.0.0-dev"
-
-#: The product-level image name a gateway's own container runs under (see
-#: `gather_own_container_logs`) -- deliberately still "cttc-gateway", not a
-#: log-sump-specific name: to an end user this remains the cttc gateway
-#: product, log-sump is only the internal backend rewrite. Update this if a
-#: later phase's build tagging changes.
-OWN_CONTAINER_IMAGE_NAME = "cttc-gateway"
 
 
 # ── gateway ownership (br-OWNER-001, REQ-0069) ──────────────────────────────
@@ -109,9 +102,10 @@ async def require_owner_signature(
     that verifies against the current owner's public key. Returns the
     ownership record on success, for the caller's own use (rotate needs the
     prior owner's `installedAt`). A plain function called at the top of
-    each admin route handler, not a FastAPI dependency -- ported from
-    cttc's own `_require_owner_signature` verbatim, including why: each
-    admin route needs a different `action` label for its own audit-log
+    each admin route handler, not a FastAPI dependency -- ported from a
+    prior gateway implementation's own `_require_owner_signature`
+    verbatim, including why: each admin route needs a different `action`
+    label for its own audit-log
     line, and the body itself (not just headers) carries the nonce/
     signature, so there's nothing a `Depends()` would factor out cleanly
     that this function doesn't already do.
@@ -250,8 +244,9 @@ def build_raw_redis_view(redis: Redis) -> Redis:
     response through redis-py's own per-command response-callback table
     (e.g. SET's callback turns "OK" into a bool), so it's not actually "raw"
     the way a real `redis-cli`'s wire read is. Clearing `response_callbacks`
-    on this instance is what makes it genuinely raw. Ported from cttc's own
-    `RedisLog`'s `_raw_client` construction verbatim.
+    on this instance is what makes it genuinely raw. Ported from a prior
+    gateway implementation's own `RedisLog`'s `_raw_client` construction
+    verbatim.
     """
     raw = Redis(connection_pool=redis.connection_pool)
     raw.response_callbacks = {}
@@ -286,10 +281,11 @@ def redis_type_reply(raw: Any) -> dict[str, Any]:
 # ── own-container log gathering (GET /mlog) ─────────────────────────────────
 
 
-async def _find_own_container() -> tuple[str, str] | None:
-    """(container id, name) for the container running this gateway's own
-    image, or `None` if this process isn't running containerized at all (the
-    embedded/bare-process fallback), or docker itself isn't reachable.
+async def _find_own_container(own_container_image_name: str) -> tuple[str, str] | None:
+    """(container id, name) for the container running the image named
+    `own_container_image_name`, or `None` if this process isn't running
+    containerized at all (the embedded/bare-process fallback), or docker
+    itself isn't reachable.
     """
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -308,24 +304,36 @@ async def _find_own_container() -> tuple[str, str] | None:
             continue
         row = json.loads(line)
         image = row.get("Image", "")
-        if image.split(":")[0].rsplit("/", 1)[-1] == OWN_CONTAINER_IMAGE_NAME:
+        if image.split(":")[0].rsplit("/", 1)[-1] == own_container_image_name:
             return row["ID"], row["Names"]
     return None
 
 
-async def gather_own_container_logs(timeout_s: float = 15.0) -> tuple[str, bytes]:
+async def gather_own_container_logs(
+    own_container_image_name: str | None, timeout_s: float = 15.0
+) -> tuple[str, bytes]:
     """(name, log bytes) for `docker logs` on the gateway's own container --
     "Ship Logs" bundles this alongside the client's own log files. Falls
     back to an explanatory message (not an error) when there's no own
-    container to find.
+    container to find, or when `own_container_image_name` isn't configured
+    at all (see `GatewayConfig.own_container_image_name`'s own docstring
+    for why this can't be inferred automatically).
     """
-    found = await _find_own_container()
+    if own_container_image_name is None:
+        return (
+            "gateway",
+            b"this gateway has no configured own-container image name "
+            b"(GatewayConfig.own_container_image_name) -- cannot look up "
+            b"its own logs\n",
+        )
+    found = await _find_own_container(own_container_image_name)
     if found is None:
         return (
             "gateway",
             b"could not find this gateway's own container "
-            b"(docker ps found nothing running the " + OWN_CONTAINER_IMAGE_NAME.encode() + b" "
-            b"image -- this server may not be running containerized)\n",
+            b"(docker ps found nothing running the "
+            + own_container_image_name.encode()
+            + b" image -- this server may not be running containerized)\n",
         )
     container_id, name = found
     try:

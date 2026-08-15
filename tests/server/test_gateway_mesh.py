@@ -291,12 +291,19 @@ def _patch_docker_subprocess(
     monkeypatch.setattr(gateway_mesh.asyncio, "create_subprocess_exec", _fake_exec)
 
 
+async def test_gather_own_container_logs_returns_explanatory_message_when_unconfigured() -> None:
+    name, data = await gateway_mesh.gather_own_container_logs(None)
+
+    assert name == "gateway"
+    assert b"no configured own-container image name" in data
+
+
 async def test_gather_own_container_logs_falls_back_when_no_container_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_docker_subprocess(monkeypatch, ps_output=b"", logs_output=b"")
 
-    name, data = await gateway_mesh.gather_own_container_logs()
+    name, data = await gateway_mesh.gather_own_container_logs("test-gateway")
 
     assert name == "gateway"
     assert b"could not find this gateway's own container" in data
@@ -305,12 +312,12 @@ async def test_gather_own_container_logs_falls_back_when_no_container_found(
 async def test_gather_own_container_logs_finds_and_fetches_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ps_line = b'{"ID":"abc123","Names":"my-gateway","Image":"cttc-gateway:latest"}\n'
+    ps_line = b'{"ID":"abc123","Names":"my-gateway","Image":"test-gateway:latest"}\n'
     _patch_docker_subprocess(
         monkeypatch, ps_output=ps_line, logs_output=b"hello from the gateway\n"
     )
 
-    name, data = await gateway_mesh.gather_own_container_logs()
+    name, data = await gateway_mesh.gather_own_container_logs("test-gateway")
 
     assert name == "my-gateway"
     assert data == b"hello from the gateway\n"
@@ -322,7 +329,7 @@ async def test_gather_own_container_logs_ignores_containers_with_a_different_ima
     ps_line = b'{"ID":"abc123","Names":"unrelated","Image":"nginx:latest"}\n'
     _patch_docker_subprocess(monkeypatch, ps_output=ps_line, logs_output=b"")
 
-    name, data = await gateway_mesh.gather_own_container_logs()
+    name, data = await gateway_mesh.gather_own_container_logs("test-gateway")
 
     assert name == "gateway"
     assert b"could not find this gateway's own container" in data

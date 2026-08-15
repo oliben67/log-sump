@@ -1,5 +1,5 @@
-"""Migration plan Phase 4: Scheduler -- direct translation of cttc's own
-scheduler.py.
+"""Migration plan Phase 4: Scheduler -- direct translation of a prior
+gateway implementation's own scheduler.py.
 """
 
 import pytest

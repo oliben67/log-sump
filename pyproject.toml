@@ -13,7 +13,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.9",  # required by FastAPI's UploadFile (POST /files/upload)
-    "croniter>=6.0",  # scheduling.py (Phase 4) -- same as cttc's own server.py dependency
+    "croniter>=6.0",  # scheduling.py (Phase 4) -- same cron library a prior gateway impl used
 ]
 
 [dependency-groups]

@@ -50,11 +50,11 @@ async def run_tick_loop(
     interval_seconds: float,
 ) -> None:
     """Periodically ticks sessions/buffers/scheduler (migration plan
-    Phase 4) -- cttc's own equivalent is referenced across
-    recording_session.py/rolling_buffer.py's docstrings as "server.py's
-    background loop"/"sessions_loop". One combined loop, not three
-    separate tasks: these tick()s are cheap, in-memory-only sweeps: the
-    actual Redis I/O only happens when a session/buffer's window is
+    Phase 4) -- the prior gateway implementation's own equivalent is
+    referenced across recording_session.py/rolling_buffer.py's docstrings
+    as "server.py's background loop"/"sessions_loop". One combined loop,
+    not three separate tasks: these tick()s are cheap, in-memory-only
+    sweeps: the actual Redis I/O only happens when a session/buffer's window is
     actually exported (on stop, or once a session's own duration elapses),
     not on every tick.
     """

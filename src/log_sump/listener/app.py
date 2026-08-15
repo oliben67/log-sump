@@ -146,11 +146,11 @@ async def run_daemon(
             listing_interval_s=settings.listener.listing_interval_s,
         ),
         tracker.run_forever(),
-        # Discovery only (cttc's docker_ps's "services" list) -- always on,
-        # like containers-listing, and just as tolerant of a non-swarm
-        # daemon (the common case: every cycle no-ops, see its own
-        # docstring). Not gated by settings.metrics.enabled -- it ships no
-        # metrics of its own, just which services currently exist.
+        # Discovery only (the "services" list alongside plain containers)
+        # -- always on, like containers-listing, and just as tolerant of a
+        # non-swarm daemon (the common case: every cycle no-ops, see its
+        # own docstring). Not gated by settings.metrics.enabled -- it ships
+        # no metrics of its own, just which services currently exist.
         run_services_listing(
             daemon.id,
             transport,

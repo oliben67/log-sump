@@ -8,15 +8,16 @@ Migration plan Phase 7 adds two more, unrelated tiers alongside the
 per-daemon one above -- both additive, neither replacing
 `RedisApiKeyAuthBackend`:
 
-- `GatewayTokenAuthBackend`: cttc's own unscoped shared-secret gateway
-  token (`X-CTTC-Token`), for the new gateway-mesh/admin routes
+- `GatewayTokenAuthBackend`: an unscoped shared-secret gateway token
+  (`X-CTTC-Token`), for the gateway-mesh/admin routes
   (`log_sump.server.routers.gateway`) that have no per-daemon concept at
   all -- a whole-gateway identity/ownership action isn't scoped to any one
   `docker_host`.
 - `verify_owner_signature`: proves a request was authorized by the
   gateway's *current owner*, for the admin-tier actions gated by
   `log_sump.server.gateway_mesh.require_owner_signature` (ownership
-  rotation). Ported from cttc's own `_verify_owner_signature` verbatim.
+  rotation). Ported from a prior gateway implementation's own
+  `_verify_owner_signature` verbatim.
 """
 
 from __future__ import annotations
@@ -33,9 +34,13 @@ from log_sump.common.redis_keys import auth_key
 #: The `-n` namespace `ssh-keygen -Y sign`/`verify` both must agree on --
 #: scopes a signature to this specific purpose, so a signature produced for
 #: some other `ssh-keygen -Y` consumer (e.g. git commit signing with the
-#: same key) could never be replayed here, and vice versa. Matches cttc's
-#: own `ADMIN_SIGNATURE_NAMESPACE` exactly -- an existing owner's already-
-#: issued signing setup must keep working unchanged across the migration.
+#: same key) could never be replayed here, and vice versa. Kept as a fixed
+#: value (not a Settings field, unlike e.g.
+#: `GatewayConfig.own_container_image_name`): unlike a purely internal
+#: deployment choice, this value has to match whatever a client's own
+#: signing tooling already hardcodes when it produces a signature -- an
+#: existing owner's already-issued signing setup must keep working
+#: unchanged.
 ADMIN_SIGNATURE_NAMESPACE = "cttc-admin-auth"
 
 
@@ -65,18 +70,16 @@ class RedisApiKeyAuthBackend:
 
 
 class GatewayTokenAuthBackend:
-    """Unscoped shared-secret gateway token -- cttc's own auth model (one
-    token protects the whole gateway), unlike `RedisApiKeyAuthBackend`'s
-    per-daemon scoping above. Configured (from `Settings.gateway.token`),
-    not Redis-provisioned: a single network-perimeter secret set once at
-    deploy time (matches cttc's own `CTTC_API_TOKEN`) doesn't need a
+    """Unscoped shared-secret gateway token (one token protects the whole
+    gateway), unlike `RedisApiKeyAuthBackend`'s per-daemon scoping above.
+    Configured (from `Settings.gateway.token`), not Redis-provisioned: a
+    single network-perimeter secret set once at deploy time doesn't need a
     revocable-credential store the way per-client API keys do.
 
     Unset (`token=None`, the default) means "no gate" -- exactly as
     permissive as an embedded, never-network-reachable "This machine"
-    gateway already is, matching cttc's own `_require_api_token` docstring:
-    "this only ever tightens a deployment that opted into being reachable
-    from the network in the first place."
+    gateway already is: this only ever tightens a deployment that opted
+    into being reachable from the network in the first place.
     """
 
     def __init__(self, token: str | None) -> None:
@@ -95,8 +98,9 @@ class GatewayTokenAuthBackend:
 async def verify_owner_signature(nonce: str, signature: str, owner_public_key: str) -> bool:
     """Verifies `signature` -- an `ssh-keygen -Y sign` SSHSIG armor blob --
     over `nonce`, against `owner_public_key`, by shelling out to
-    `ssh-keygen -Y verify`. Ported from cttc's own `_verify_owner_signature`
-    verbatim, including why: NOT paramiko, despite it already being a
+    `ssh-keygen -Y verify`. Ported from a prior gateway implementation's
+    own `_verify_owner_signature` verbatim, including why: NOT paramiko,
+    despite it already being a
     dependency for Docker-host SSH transport (`transport.py`'s
     `SSHTransport`) -- paramiko's own signature verification speaks the raw
     SSH auth-protocol wire format (RFC 4252/8332), not the SSHSIG envelope

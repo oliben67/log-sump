@@ -1,9 +1,10 @@
 """Gateway-hosted events (migration plan Phase 5): watch metrics/logs on a
 `docker_host` and, when one or more conditions are met, take a snapshot or
-start a recording -- no polling by the client required. Direct translation
-of cttc's own events.py, scoped to a single `docker_host` (log-sump's own
-addressing unit) instead of an arbitrary "currently open sources" set --
-same reasoning as `sessions.py`/`buffers.py`.
+start a recording -- no polling by the client required. Ported from a
+prior gateway implementation's own events.py, scoped to a single
+`docker_host` (log-sump's own addressing unit) instead of an arbitrary
+"currently open sources" set -- same reasoning as `sessions.py`/
+`buffers.py`.
 
 An event can carry more than one condition; `match` picks whether *any*
 one of them firing is enough (default) or *all* must be true at once. A
@@ -11,9 +12,9 @@ metric condition (cpu/mem/net + comparison + threshold) is checked against
 the *latest* sample of every container on the monitored daemon; a log
 condition (a regex) is checked against every new log line since the event
 was created or last checked -- addressed by a Stream ID cursor, one per
-condition (not per-source like cttc: a `docker_host` here has a single
-shared log stream, not per-source zsets, so there's no source-keyed
-sub-dict needed).
+condition (not per-source, unlike that prior implementation: a
+`docker_host` here has a single shared log stream, not per-source zsets,
+so there's no source-keyed sub-dict needed).
 
 The snapshot action needs "the records on hand" the moment a condition
 fires, including a bit of *before* the trigger -- exactly what

@@ -43,10 +43,9 @@ RUN apt-get update \
 # binary with no daemon-connection flags at all, so for the embedded "This
 # machine" gateway target to see the *host's* containers, this image needs
 # the CLI on PATH talking to the host's daemon over a mounted
-# /var/run/docker.sock (see releases/_shared/docker-compose.yml in the
-# parent cttc repo). The static binary (not an apt package) avoids adding
-# Docker's own apt repo/signing key just for one binary -- same approach,
-# same pinned version, as cttc's own now-superseded app/server/Dockerfile.
+# /var/run/docker.sock (a deployment's own compose file is what actually
+# mounts that socket in). The static binary (not an apt package) avoids
+# adding Docker's own apt repo/signing key just for one binary.
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
         amd64) DOCKER_ARCH=x86_64 ;; \
@@ -67,9 +66,9 @@ RUN set -eux; \
 # /dev/null. Container filesystem is ephemeral, so this effectively
 # re-TOFUs every container restart -- acceptable since restarts are an
 # operator action, not something reachable by whatever's on the other end
-# of the ssh connection. Matches app/server/Dockerfile's identical setup.
+# of the ssh connection.
 RUN mkdir -p /etc/ssh/ssh_config.d && printf 'Host *\n  StrictHostKeyChecking accept-new\n' \
-    > /etc/ssh/ssh_config.d/99-cttc-accept-new.conf
+    > /etc/ssh/ssh_config.d/99-accept-new.conf
 
 # --- s6-overlay (process supervisor, spec §3.2) ---
 RUN set -eux; \

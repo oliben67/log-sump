@@ -9,10 +9,11 @@ No live daemon backs this data, so there's no pre-provisioned
 `RedisApiKeyAuthBackend`). Instead a `docker_host` is synthesized,
 content-addressed from the uploaded bytes themselves
 (`local:<sha256(data)[:16]>`), so re-uploading the identical file twice
-resolves to the identical id -- cttc's own `_content_entity_id`'s
-idempotent-reload property (`server.py`'s docstring: "re-loading the exact
-same recording/metric twice resolves to the same entity"), just derived
-from raw content instead of gateway/host/container provenance. The
+resolves to the identical id -- the same idempotent-reload property a
+prior gateway implementation's own content-addressed entity id had
+("re-loading the exact same recording/metric twice resolves to the same
+entity"), just derived from raw content instead of gateway/host/container
+provenance. The
 uploading caller's own API key is then granted access to that id
 (`auth_key`, the same Redis set `/catalog`/`/records` already read), so the
 client that just uploaded a file can immediately query it through every
@@ -43,9 +44,9 @@ from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 
-from log_sump.common.cttc_archive import ArchivedSource, is_cttc_archive, read_archive
 from log_sump.common.log_line_parsing import parse_log_lines
 from log_sump.common.redis_keys import auth_key, stream_key
+from log_sump.common.sample_archive import ArchivedSource, is_sample_archive, read_archive
 from log_sump.common.schema import Kind, LogRecord, MetricRecord
 
 from .broadcast import Broadcaster
@@ -72,22 +73,23 @@ async def ingest_upload(
     segment: int | None = None,
     broadcaster: Broadcaster | None = None,
 ) -> UploadResult:
-    """Parse `data` (dispatched on `filename`'s extension, like cttc's own
-    `files.upload_and_open`) into Records, bulk-`XADD`s them under a
-    content-addressed synthetic `docker_host`, grants `api_key` access to
-    it, and reports what was ingested. `broadcaster`, if given, publishes
-    an SSE `{"type": "update", "docker_host": ...}` notification (migration
-    plan Phase 6) once the data actually lands.
+    """Parse `data` (dispatched on `filename`'s extension, matching a prior
+    gateway implementation's own `files.upload_and_open`) into Records,
+    bulk-`XADD`s them under a content-addressed synthetic `docker_host`,
+    grants `api_key` access to it, and reports what was ingested.
+    `broadcaster`, if given, publishes an SSE `{"type": "update",
+    "docker_host": ...}` notification (migration plan Phase 6) once the
+    data actually lands.
 
-    Raises `log_sump.common.cttc_archive.MultiSegmentArchive` unchanged --
-    same "ask the caller which segment" contract as cttc's own
-    `MultiSegmentSample`.
+    Raises `log_sump.common.sample_archive.MultiSegmentArchive` unchanged --
+    the same "ask the caller which segment" contract that implementation's
+    own `MultiSegmentSample` had.
     """
     docker_host = _synthetic_docker_host(data)
 
     logs: list[LogRecord] = []
     metrics: list[MetricRecord] = []
-    if is_cttc_archive(filename):
+    if is_sample_archive(filename):
         for source in read_archive(data, segment=segment):
             logs.extend(_archived_log_records(docker_host, source))
             metrics.extend(_archived_metric_records(docker_host, source))
@@ -149,8 +151,8 @@ def _archived_metric_records(docker_host: str, source: ArchivedSource) -> list[M
         return []
     out: list[MetricRecord] = []
     for svc, rows in source.stats_series.items():
-        # A dotted name round-trips cttc's own swarm-service grouping
-        # through log-sump's own query-time _metric_group (see
+        # A dotted name round-trips the archive format's own swarm-service
+        # grouping through log-sump's own query-time _metric_group (see
         # ArchivedSource's docstring) -- a plain container has no dot and
         # stays its own group either way.
         container_name = f"{svc}.imported.0" if svc in source.swarm_services else svc
@@ -167,9 +169,9 @@ def _archived_metric_records(docker_host: str, source: ArchivedSource) -> list[M
                     cpu_pct=cpu,
                     mem_pct=mem,
                     mem_used_bytes=int(mem_bytes) if mem_bytes is not None else None,
-                    source="cttc-import",
-                    # cttc's archive stores an already-computed rate, not a
-                    # cumulative counter -- can't fill net_rx_bytes/
+                    source="sample-archive-import",
+                    # The archive format stores an already-computed rate,
+                    # not a cumulative counter -- can't fill net_rx_bytes/
                     # net_tx_bytes without fabricating a split that was
                     # never recorded, so the original value is preserved
                     # verbatim here instead (see ArchivedSource's own

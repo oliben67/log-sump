@@ -15,13 +15,13 @@ task containers already show up in ordinary `docker ps`/`docker stats` and
 get collected as ordinary containers -- `queries.py`'s query-time grouping
 by service name (`_metric_group`) is what actually merges them into one
 service timeline. This task exists purely so a client can discover *which*
-services currently exist (cttc's `docker_ps`'s "services" list, used by the
-Set Sources picker to offer a whole service as a collection target), not to
-collect anything itself.
+services currently exist (spec: a "services" list alongside the plain
+container list, for a client to offer a whole service as a collection
+target), not to collect anything itself.
 
-Tolerates "not a swarm manager" the same way cttc's own `docker_ps` does: a
-failed cycle just means nothing ships this round, not a fatal error, so a
-non-swarm daemon (the common case) never spams a warning every cycle.
+Tolerates "not a swarm manager" gracefully: a failed cycle just means
+nothing ships this round, not a fatal error, so a non-swarm daemon (the
+common case) never spams a warning every cycle.
 """
 
 from __future__ import annotations
@@ -54,9 +54,9 @@ async def run_services_listing(
             await _sample_once(docker_host, transport, records_logger, seq_counter)
         except (TransportError, ValueError) as exc:
             # Not a swarm manager (the common case) or a transient failure --
-            # same tolerance cttc's own docker_ps's `docker service ls` try/
-            # except has. Debug, not warning: this fires every cycle on every
-            # non-swarm daemon, so anything louder would be pure noise.
+            # tolerated the same way as any other `docker service ls`
+            # try/except. Debug, not warning: this fires every cycle on
+            # every non-swarm daemon, so anything louder would be pure noise.
             await logger.adebug(
                 "services_listing.cycle_failed", docker_host=docker_host, error=str(exc)
             )

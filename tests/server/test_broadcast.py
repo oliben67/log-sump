@@ -1,5 +1,5 @@
-"""Migration plan Phase 6: Broadcaster -- direct translation of cttc's own
-State.listeners/broadcast().
+"""Migration plan Phase 6: Broadcaster -- direct translation of a prior
+gateway implementation's own State.listeners/broadcast().
 """
 
 import asyncio

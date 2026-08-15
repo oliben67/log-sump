@@ -1,12 +1,12 @@
 """Gateway-mesh + admin-auth routes (migration plan Phase 7): `/ping`,
 `/gateways/sync`, gateway ownership claim/challenge/rotate, and the small
-dev-tool routes cttc groups alongside them (`/mlog`, `/admin/redis-cli`,
-`/shutdown`) -- ported from `server.py`'s equivalents with no behavior
-change intended (see `gateway_mesh.py`'s own module docstring). Every route
-here is gated by the shared gateway token (`deps.require_gateway_token`),
-except `/ping` -- cttc's own `_UNAUTHENTICATED_PATHS` exemption, since a
-client that just learned about a peer via mesh sync has no token for it
-yet.
+dev-tool routes grouped alongside them (`/mlog`, `/admin/redis-cli`,
+`/shutdown`) -- ported from a prior gateway implementation's equivalents
+with no behavior change intended (see `gateway_mesh.py`'s own module
+docstring). Every route here is gated by the shared gateway token
+(`deps.require_gateway_token`), except `/ping` -- an unauthenticated
+exemption, since a client that just learned about a peer via mesh sync has
+no token for it yet.
 """
 
 from __future__ import annotations
@@ -190,9 +190,10 @@ async def route_gateway_ownership_rotate(
     """br-OWNER-003 (REQ-0069): transfers ownership to a new owner -- the
     one ownership-record write path allowed to *replace* an existing
     record, gated on proof the *current* owner authorized it. Does not
-    rotate the gateway token itself (a later phase's client reconnect logic
-    would silently undo an in-memory-only rotation here, same reasoning as
-    cttc's own open question on this point).
+    rotate the gateway token itself: a client's own reconnect logic would
+    silently undo an in-memory-only rotation here, since the token is
+    normally supplied fresh on every reconnect -- an open question left to
+    whatever deployment-specific reconnect flow a client implements.
     """
     client_host = request.client.host if request.client else "?"
     current = await gateway_mesh.require_owner_signature(
@@ -210,21 +211,23 @@ async def route_gateway_ownership_rotate(
 
 
 @router.get("/mlog", dependencies=_gated)
-async def route_mlog() -> Response:
-    """Ship Logs (Settings > Collect CTTC Own Logs): `docker logs` on the
-    gateway's own container, named after it. The filename travels in a
-    header since a plain download response has no other structured place
-    to carry it.
+async def route_mlog(settings: Annotated[Settings, Depends(get_settings)]) -> Response:
+    """"Ship logs": `docker logs` on the gateway's own container, named
+    after it (see `GatewayConfig.own_container_image_name`). The filename
+    travels in a header since a plain download response has no other
+    structured place to carry it.
     """
-    name, data = await gateway_mesh.gather_own_container_logs()
+    name, data = await gateway_mesh.gather_own_container_logs(
+        settings.gateway.own_container_image_name
+    )
     return Response(
         content=data,
         media_type="text/plain",
         headers={
-            "X-CTTC-Gateway-Name": name,
+            "X-Gateway-Name": name,
             "Content-Disposition": f'attachment; filename="{name}.log"',
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "X-CTTC-Gateway-Name",
+            "Access-Control-Expose-Headers": "X-Gateway-Name",
         },
     )
 

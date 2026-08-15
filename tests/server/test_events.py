@@ -1,5 +1,6 @@
-"""Migration plan Phase 5: EventManager -- a representative subset of
-cttc's own extensive test_events.py, ported to docker_host scoping.
+"""Migration plan Phase 5: EventManager -- a representative subset of a
+prior gateway implementation's own extensive test_events.py, ported to
+docker_host scoping.
 """
 
 import json

@@ -1,5 +1,6 @@
 """Migration plan Phase 5: TransformRegistry/apply_transforms -- direct
-translation of cttc's own TransformRegistry/apply_transforms (server.py).
+translation of a prior gateway implementation's own
+TransformRegistry/apply_transforms (server.py).
 """
 
 from datetime import UTC, datetime

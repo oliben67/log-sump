@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from log_sump.common.cttc_archive import MultiSegmentArchive
+from log_sump.common.sample_archive import MultiSegmentArchive
 
 from ..broadcast import Broadcaster
 from ..deps import get_broadcaster, get_raw_api_key, get_redis

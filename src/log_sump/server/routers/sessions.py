@@ -6,8 +6,9 @@ Auth: starting a session against a `docker_host` requires access to that
 daemon, same as any other route (`require_daemon_access`). Every other
 action here (stop/safe/status/download) takes just a session id, with no
 `docker_host` of its own to check -- gated by `require_valid_api_key`
-(any known key) instead, matching cttc's own model, which has no
-per-resource authorization at all beyond its single shared gateway token.
+(any known key) instead, since there's no per-resource authorization
+model for a bare session id to check against beyond the caller having
+*some* valid key.
 """
 
 from __future__ import annotations

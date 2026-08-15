@@ -1,5 +1,5 @@
-"""Migration plan Phase 4: BufferManager -- direct translation of cttc's
-own rolling_buffer.py, scoped to a docker_host.
+"""Migration plan Phase 4: BufferManager -- direct translation of a prior
+gateway implementation's own rolling_buffer.py, scoped to a docker_host.
 """
 
 import asyncio
@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 import pytest
 from fakeredis import FakeAsyncRedis
 
-from log_sump.common.cttc_archive import read_archive
 from log_sump.common.redis_keys import stream_key
+from log_sump.common.sample_archive import read_archive
 from log_sump.common.schema import Kind
 from log_sump.server.buffers import MAX_OPEN, BufferManager, TooManyBuffers, UnknownBuffer
 

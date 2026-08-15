@@ -14,8 +14,7 @@ def main() -> None:
     app = create_app(settings)
     # Built manually (not the `uvicorn.run()` convenience wrapper) so
     # `POST /shutdown` (migration plan Phase 7, `routers/gateway.py`) has a
-    # `Server` instance to set `should_exit` on -- matches cttc's own
-    # `main()`, which does the same for the identical reason.
+    # `Server` instance to set `should_exit` on.
     config = uvicorn.Config(app, host=settings.server.bind_host, port=settings.server.bind_port)
     server = uvicorn.Server(config)
     app.state.uvicorn_server = server

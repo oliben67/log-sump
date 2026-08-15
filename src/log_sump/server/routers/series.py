@@ -1,4 +1,4 @@
-"""Timeline queries the cttc scrubbing UI needs on top of log-sump's
+"""Timeline queries a scrubbing-timeline UI needs on top of log-sump's
 existing per-daemon Streams (migration plan, Phase 1): `/point`, `/ticks`,
 `/series`, `/logs/find`, `/index_at`. Daemon-scoped, same auth dependency as
 `/records` -- see `queries.py` for the actual `XRANGE` logic each of these
@@ -167,9 +167,9 @@ async def get_services(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> ServicesResponse:
     """The daemon's currently-listed swarm services (`docker service ls`) --
-    cttc's `docker_ps`'s "services" list, offered by the Set Sources picker
-    alongside individual containers. Empty on a non-swarm daemon, not an
-    error (see `services_listing.py`'s own tolerance for "not a manager").
+    for a client to offer alongside individual containers as a collection
+    target. Empty on a non-swarm daemon, not an error (see
+    `services_listing.py`'s own tolerance for "not a manager").
     """
     require_daemon_access(docker_host, permitted)
     records = await latest_services(redis, docker_host)

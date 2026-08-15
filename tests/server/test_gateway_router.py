@@ -29,7 +29,7 @@ async def redis() -> AsyncIterator[FakeAsyncRedis]:
 async def client(redis: FakeAsyncRedis) -> AsyncIterator[AsyncClient]:
     """No gateway token configured -- matches the embedded, never-network-
     reachable default; gateway-mesh routes are unauthenticated here, same
-    as cttc's own default.
+    as a prior gateway implementation's own default.
     """
     app = create_app(settings=Settings(), redis=redis)
     async with app.router.lifespan_context(app):
@@ -281,7 +281,9 @@ async def test_mlog_returns_a_fallback_message_outside_docker(
     (test_gateway_mesh.py) cover the found/not-found branches directly.
     """
 
-    async def _fake_gather(timeout_s: float = 15.0) -> tuple[str, bytes]:
+    async def _fake_gather(
+        own_container_image_name: str | None, timeout_s: float = 15.0
+    ) -> tuple[str, bytes]:
         return "test-gateway", b"log line 1\nlog line 2\n"
 
     monkeypatch.setattr(
@@ -291,7 +293,7 @@ async def test_mlog_returns_a_fallback_message_outside_docker(
     resp = await client.get("/mlog")
 
     assert resp.status_code == 200
-    assert resp.headers["X-CTTC-Gateway-Name"] == "test-gateway"
+    assert resp.headers["X-Gateway-Name"] == "test-gateway"
     assert resp.content == b"log line 1\nlog line 2\n"
 
 

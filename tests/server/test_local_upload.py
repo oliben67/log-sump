@@ -68,7 +68,7 @@ async def test_ingest_upload_grants_uploader_access_to_synthetic_host() -> None:
     assert result.docker_host.encode() in permitted or result.docker_host in permitted
 
 
-async def test_ingest_upload_cttc_archive_produces_logs_and_metrics() -> None:
+async def test_ingest_upload_sample_archive_produces_logs_and_metrics() -> None:
     redis = FakeAsyncRedis()
 
     result = await ingest_upload(

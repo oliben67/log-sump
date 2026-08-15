@@ -1,14 +1,15 @@
 """Timestamp/line parsing for arbitrary local log files -- migration plan
 Phase 2 (the "open a local file with no daemon/container involved" gap).
 
-Ported from cttc's own `server.py` (`parse_ts`/`LogSource._parse_line`/
-`LogSource.ingest_chunk`'s continuation-line handling) unchanged: same ISO
-timestamp regex (handles docker's 9-digit nanosecond fractions), same
+Ported unchanged from a prior gateway implementation's own log-source
+parsing (`parse_ts`/`LogSource._parse_line`/`LogSource.ingest_chunk`'s
+continuation-line handling): same ISO timestamp regex (handles docker's
+9-digit nanosecond fractions), same
 `docker service logs`-prefix strip, same JSON-body-with-embedded-timestamp
 fallback, same "no timestamp of its own -> append to the previous row"
 continuation-line rule for multi-line entries like stack traces.
 
-Dependency-free (no Redis/FastAPI/State ties), matching `cttc_archive.py`'s
+Dependency-free (no Redis/FastAPI/State ties), matching `sample_archive.py`'s
 own reasoning for living in `log_sump.common` rather than `log_sump.server`.
 """
 
@@ -102,8 +103,8 @@ def parse_log_lines(text: str) -> list[ParsedLine]:
     A line with no timestamp of its own (a stack trace's continuation
     lines, for example) is appended -- newline-joined -- onto the previous
     row's `text` rather than becoming its own row or being dropped, unless
-    there is no previous row yet, in which case it's skipped (matches
-    cttc's `LogSource.ingest_chunk`).
+    there is no previous row yet, in which case it's skipped (matches the
+    prior gateway implementation's own `LogSource.ingest_chunk`).
     """
     rows: list[ParsedLine] = []
     for raw in text.splitlines():

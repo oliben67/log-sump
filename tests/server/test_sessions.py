@@ -1,6 +1,6 @@
-"""Migration plan Phase 4: SessionManager -- direct translation of cttc's
-own recording_session.py, scoped to a docker_host instead of an arbitrary
-open-source set.
+"""Migration plan Phase 4: SessionManager -- direct translation of a prior
+gateway implementation's own recording_session.py, scoped to a docker_host
+instead of an arbitrary open-source set.
 """
 
 import asyncio
@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 import pytest
 from fakeredis import FakeAsyncRedis
 
-from log_sump.common.cttc_archive import read_archive
 from log_sump.common.redis_keys import session_data_key, stream_key
+from log_sump.common.sample_archive import read_archive
 from log_sump.common.schema import Kind
 from log_sump.server.sessions import SessionManager, UnknownSession
 

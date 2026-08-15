@@ -78,7 +78,7 @@ async def require_valid_api_key_sse(
     also accepts the key via an `api_key` query param — the one concession
     browsers force: a native `EventSource` (`GET /events`, `routers/
     live.py`) can't attach a custom header at all, by spec, so the query
-    string is the only channel it has. cttc's own `_require_api_token` has
+    string is the only channel it has. `require_gateway_token` below has
     the identical `?token=` fallback, for the identical reason.
     """
     api_key = header_key or request.query_params.get("api_key")
@@ -144,14 +144,14 @@ async def require_gateway_token(
     header_token: Annotated[str | None, Security(_gateway_token_header)] = None,
 ) -> None:
     """Gates a gateway-mesh/admin route behind the shared-secret gateway
-    token (migration plan Phase 7) -- cttc's own `_require_api_token`,
-    translated from a blanket middleware into an ordinary per-route
-    dependency to match this codebase's existing convention (every other
-    auth tier here is a `Depends()`, not middleware; see this module's own
-    docstring). Unlike `require_valid_api_key`, a missing/unset
-    `GatewayTokenAuthBackend.token` means "no gate at all", not "reject" --
-    matches cttc's own "unset stays exactly as permissive as it always was"
-    semantics for the embedded, never-network-reachable deployment case.
+    token (migration plan Phase 7) -- an ordinary per-route dependency (not
+    a blanket middleware) to match this codebase's existing convention
+    (every other auth tier here is a `Depends()`, not middleware; see this
+    module's own docstring). Unlike `require_valid_api_key`, a missing/
+    unset `GatewayTokenAuthBackend.token` means "no gate at all", not
+    "reject" -- an unset token stays exactly as permissive as a deployment
+    that never opted into requiring one, matching the embedded,
+    never-network-reachable case.
 
     Accepts a `?token=` query param as a fallback alongside the header, for
     the same reason `require_valid_api_key_sse` does: a browser's native

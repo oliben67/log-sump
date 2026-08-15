@@ -1,13 +1,13 @@
 """User-supplied per-record transform plugins (migration plan Phase 5).
-Direct translation of cttc's own `TransformRegistry`/`apply_transforms`
-(`server.py`) -- log-only, matching cttc exactly: `StatsSource` never
-routed records through this, only `LogSource` did.
+Ported from a prior gateway implementation's own `TransformRegistry`/
+`apply_transforms` -- log-only, matching that behavior exactly: stats
+records never routed through this, only log records did.
 
 Applied in `ingest/consumer.py`'s `_ingest_batch`, immediately before the
 existing validate-then-`XADD` step, to every incoming `LogRecord` (the
 Logstash-fed live path only -- not the local-upload path, a deliberate
 scope boundary for this pass: an uploaded/imported archive is typically
-either an already-processed cttc export or plain text where a transform
+either an already-processed export or plain text where a transform
 matters far less than for noisy live collection).
 """
 
@@ -79,8 +79,9 @@ class TransformRegistry:
 def apply_transforms(
     record: LogRecord, transform_fns: list[tuple[str, TransformFn]]
 ) -> list[LogRecord]:
-    """cttc's own `apply_transforms`, ported: a record dict in, record
-    dict(s) or `None` out per transform, chained. Operates on
+    """Ported from a prior gateway implementation's own `apply_transforms`:
+    a record dict in, record dict(s) or `None` out per transform, chained.
+    Operates on
     `record.model_dump()` at the boundary and re-validates each surviving
     dict back into a `LogRecord` -- output that no longer validates is
     dropped (logged), not allowed to corrupt a stream with a malformed

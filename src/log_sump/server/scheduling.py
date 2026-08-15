@@ -1,6 +1,7 @@
 """Time-based triggering for recording sessions (migration plan Phase 4).
-Direct translation of cttc's own scheduler.py -- sessions.py owns *what* a
-session is; this module owns *when* one starts. A Schedule is either:
+Ported from a prior gateway implementation's own scheduler.py --
+sessions.py owns *what* a session is; this module owns *when* one starts.
+A Schedule is either:
 
   - one-shot: fires exactly once at `start_at` (epoch ms), or
   - recurring: fires every time `cron` (a standard 5-field cron
@@ -118,10 +119,10 @@ class Scheduler:
                     # occurrences were actually missed (a stalled/suspended
                     # process on "* * * * *" could otherwise fire dozens of
                     # back-dated sessions in one burst, all recording the
-                    # same "now" window) -- matches cttc's own br-SCHED-004
-                    # fix. Fire once, then fast-forward next_fire past
-                    # every other already-past occurrence without firing
-                    # again for them.
+                    # same "now" window) -- a known fix ported from a prior
+                    # gateway implementation. Fire once, then fast-forward
+                    # next_fire past every other already-past occurrence
+                    # without firing again for them.
                     self._fire_safe(sch)
                     next_fire = sch.next_fire
                     while next_fire is not None and now >= next_fire:

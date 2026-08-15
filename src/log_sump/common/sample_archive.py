@@ -1,16 +1,15 @@
-"""Reader/writer for cttc's `.cttc-metric`/`.cttc-record` archive format
-(zip + `manifest.json`) -- migration plan Phases 2 and 4. Unchanged from
-cttc's own `cttc_format.py`/`server.py` (`_write_segment`/`_read_segments`/
-`build_sample_bytes`/`load_sample`) in both directions, so a sample
-exported by today's `app/server` reads back byte-for-byte compatible here,
-and a session/buffer written here loads back into cttc's own
-`load_sample` (or `read_archive` below) identically.
+"""Reader/writer for a portable, self-contained sample archive format (zip
++ `manifest.json`) that a session/buffer export can be downloaded as and
+later re-imported from -- migration plan Phases 2 and 4. The exact byte
+format (file extensions, manifest schema) is inherited unchanged from a
+prior gateway implementation's own archive format, so an archive produced
+by that implementation reads back byte-for-byte compatible here, and an
+archive written here loads back into that implementation identically.
 
-Dependency-free (no Redis/FastAPI ties), like cttc's own `cttc_format.py`
-was kept, so both the upload router (Phase 2) and sessions.py/buffers.py
-(Phase 4) can use it without a circular import. Neither direction knows
-anything about Streams, sessions, or buffers -- callers gather the data,
-this module only knows the archive's own shape.
+Dependency-free (no Redis/FastAPI ties) so both the upload router (Phase 2)
+and sessions.py/buffers.py (Phase 4) can use it without a circular import.
+Neither direction knows anything about Streams, sessions, or buffers --
+callers gather the data, this module only knows the archive's own shape.
 """
 
 from __future__ import annotations
@@ -22,20 +21,24 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+#: File extensions inherited from the prior gateway implementation's own
+#: archive format -- kept exactly as-is (not just the concept, the literal
+#: strings) since these are what an already-exported archive on disk
+#: actually ends in; changing them would break reading anything exported
+#: before this format lived here.
 METRIC_EXT = ".cttc-metric"
 RECORD_EXT = ".cttc-record"
 
 
-def is_cttc_archive(name: str) -> bool:
+def is_sample_archive(name: str) -> bool:
     return name.endswith(METRIC_EXT) or name.endswith(RECORD_EXT)
 
 
 class MultiSegmentArchive(ValueError):
-    """Raised by `read_archive` when the .cttc holds more than one recorded
-    segment and no `segment` index was given -- mirrors cttc's own
-    `MultiSegmentSample`, so a caller can ask which one to load instead of
-    one being picked silently. `segments` carries each one's own
-    from/to/created/source_count, same shape cttc's exception does.
+    """Raised by `read_archive` when the archive holds more than one
+    recorded segment and no `segment` index was given, so a caller can ask
+    which one to load instead of one being picked silently. `segments`
+    carries each one's own from/to/created/source_count.
     """
 
     def __init__(self, segments: list[dict]):
@@ -50,10 +53,10 @@ class ArchivedLogRow:
 
 
 #: One (ts_ms, cpu_pct, mem_pct, mem_bytes, net_rate_bps) stats row.
-#: `net_rate_bps` is cttc's own already-computed rate (bytes/sec), not a
-#: cumulative counter -- see the migration plan's Phase 2 notes on why
-#: log-sump's importer can't project this back into net_rx_bytes/
-#: net_tx_bytes without fabricating values.
+#: `net_rate_bps` is an already-computed rate (bytes/sec) in the archive
+#: format itself, not a cumulative counter -- see the migration plan's
+#: Phase 2 notes on why this importer can't project it back into
+#: net_rx_bytes/net_tx_bytes without fabricating values.
 StatsRow = tuple[float, float | None, float | None, float | None, float | None]
 
 
@@ -63,17 +66,17 @@ class ArchivedSource:
     name: str
     log_rows: list[ArchivedLogRow] = field(default_factory=list)
     stats_series: dict[str, list[StatsRow]] = field(default_factory=dict)
-    #: Service names among this segment's stats sources that cttc had
-    #: already identified as swarm-merged (see cttc's `StatsSource._swarm`)
-    #: -- used to reconstruct a dotted `<service>.imported.<n>` container
-    #: name on import, so log-sump's own `_metric_group` re-detects it as a
-    #: service instead of silently downgrading it to "container".
+    #: Service names among this segment's stats sources that were already
+    #: identified as swarm-merged by whatever produced the archive -- used
+    #: to reconstruct a dotted `<service>.imported.<n>` container name on
+    #: import, so log-sump's own `_metric_group` re-detects it as a service
+    #: instead of silently downgrading it to "container".
     swarm_services: frozenset[str] = frozenset()
 
 
 def _manifest_hash(manifest_without_hash: dict) -> str:
-    """sha256 over the canonical (sorted-keys) JSON of a manifest, matching
-    cttc's own `_manifest_hash` -- must produce the identical digest for
+    """sha256 over the canonical (sorted-keys) JSON of a manifest -- must
+    match the archive format's own reference implementation exactly for
     the integrity check below to mean anything.
     """
     payload = json.dumps(manifest_without_hash, sort_keys=True, separators=(",", ":")).encode()
@@ -85,8 +88,9 @@ def read_archive(data: bytes, *, segment: int | None = None) -> list[ArchivedSou
 
     Raises `MultiSegmentArchive` if the archive holds more than one segment
     and `segment` wasn't given. A manifest integrity-hash mismatch is
-    tamper-evidence only (matches cttc's own permissive-read bias) --
-    logged by the caller if it cares, not raised here.
+    tamper-evidence only (permissive-read bias, matching the archive
+    format's own reference implementation) -- logged by the caller if it
+    cares, not raised here.
     """
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         manifest = json.loads(z.read("manifest.json"))
@@ -160,13 +164,15 @@ def write_archive(
     sessions.py/buffers.py are the callers). `log_sources` is `(name,
     [(ts_ms, text), ...])` per container; `stats_series` is `{name: rows}`
     for every service/container on the exported daemon, all bundled into
-    one stats source (log-sump has no notion of cttc's separate per-
-    collector stats sources -- one daemon's whole metric set stands in for
-    it here, which is what `queries.export_window` already gathers).
+    one stats source (log-sump has no notion of the archive format's own
+    separate per-collector stats sources -- one daemon's whole metric set
+    stands in for it here, which is what `queries.export_window` already
+    gathers).
 
-    Always one segment: cttc's multi-segment archives are its separate
-    Record/Pause/Stop feature (`merge_sample_bytes`), out of scope here --
-    every log-sump session/buffer is a single, contiguous [t0, t1] window.
+    Always one segment: a multi-segment archive is a separate Record/
+    Pause/Stop feature of the format's reference implementation, out of
+    scope here -- every log-sump session/buffer is a single, contiguous
+    [t0, t1] window.
     """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

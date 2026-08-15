@@ -1,15 +1,17 @@
-"""Rolling metrics/log buffer feature (migration plan Phase 4). Direct
-translation of cttc's own rolling_buffer.py -- "the last N minutes" of one
-`docker_host`'s data, sliced lazily out of Streams at stop-time via
-`queries.export_window`/`cttc_archive.write_archive` (same as
-sessions.py). No source-id snapshot needed (see sessions.py's own
-docstring for why cttc's own concept has no equivalent here): a buffer is
-just `{docker_host, start_ts, minutes, paused_at}`.
+"""Rolling metrics/log buffer feature (migration plan Phase 4). Ported
+from a prior gateway implementation's own rolling_buffer.py -- "the last N
+minutes" of one `docker_host`'s data, sliced lazily out of Streams at
+stop-time via `queries.export_window`/`sample_archive.write_archive` (same
+as sessions.py). No source-id snapshot needed (see sessions.py's own
+docstring for why that prior implementation's own concept has no
+equivalent here): a buffer is just `{docker_host, start_ts, minutes,
+paused_at}`.
 
 Retention: an ad-hoc buffer (`start()`) left running longer than
 `MAX_AGE_SECONDS` with no `stop()`/`pause()` (a bug, a crash, or just
 forgetting) is reclaimed by `tick()`, and `start()` itself caps how many
-can be open at once -- matches cttc's own `br-RBUF-005` fix. Neither
+can be open at once -- a known fix (br-RBUF-005) ported from that prior
+implementation. Neither
 applies to a buffer `events.py` (Phase 5) keeps alive for an enabled
 event's entire lifetime (`owned_by_event=True`) -- that lifetime is
 bounded by the event itself (`cancel()`/`update()` always `stop()` it
@@ -23,7 +25,7 @@ from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 
-from log_sump.common.cttc_archive import write_archive
+from log_sump.common.sample_archive import write_archive
 
 from .queries import export_window
 

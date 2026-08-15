@@ -1,8 +1,9 @@
-"""Reader tests for cttc's own .cttc-metric/.cttc-record archive format --
-each fixture here is hand-built with the exact zip+manifest shape cttc's
-server.py (_write_segment/build_sample_bytes/merge_sample_bytes) produces,
-not round-tripped through log-sump's own writer (there isn't one -- see
-cttc_archive.py's module docstring).
+"""Reader tests for a prior gateway implementation's own .cttc-metric/
+.cttc-record archive format -- each fixture here is hand-built with the
+exact zip+manifest shape that implementation's server.py
+(_write_segment/build_sample_bytes/merge_sample_bytes) produces, not
+round-tripped through log-sump's own writer (there isn't one -- see
+sample_archive.py's module docstring).
 """
 
 import io
@@ -11,9 +12,9 @@ import zipfile
 
 import pytest
 
-from log_sump.common.cttc_archive import (
+from log_sump.common.sample_archive import (
     MultiSegmentArchive,
-    is_cttc_archive,
+    is_sample_archive,
     read_archive,
 )
 
@@ -35,10 +36,10 @@ def _stats_source(name: str, file: str) -> dict:
     return {"type": "stats", "name": name, "file": file, "is_host": False}
 
 
-def test_is_cttc_archive_recognizes_both_extensions() -> None:
-    assert is_cttc_archive("sample.cttc-metric")
-    assert is_cttc_archive("recording.cttc-record")
-    assert not is_cttc_archive("plain.log")
+def test_is_sample_archive_recognizes_both_extensions() -> None:
+    assert is_sample_archive("sample.cttc-metric")
+    assert is_sample_archive("recording.cttc-record")
+    assert not is_sample_archive("plain.log")
 
 
 def test_read_archive_single_segment_log_source() -> None:
@@ -92,7 +93,8 @@ def test_read_archive_stats_source_with_swarm_marker() -> None:
 def test_read_archive_legacy_no_segments_key() -> None:
     """Pre-v3 manifests have no "segments" key at all -- from/to/created/
     sources live at the top level instead. `_read_segments`'s own
-    docstring in server.py calls this the "legacy single-segment shape".
+    docstring in the prior implementation's server.py calls this the
+    "legacy single-segment shape".
     """
     log_rows = [{"ts": 1000.0, "text": "legacy"}]
     manifest = {

@@ -29,8 +29,8 @@ from typing import Literal, TypedDict
 from pydantic import ValidationError
 from redis.asyncio import Redis
 
-from log_sump.common.cttc_archive import StatsRow
 from log_sump.common.redis_keys import stream_key
+from log_sump.common.sample_archive import StatsRow
 from log_sump.common.schema import Kind, LogRecord, MetricRecord, RecordAdapter, ServiceRecord
 
 #: Redis Stream IDs are `<ms>-<seq>`; this is the max seq for a given ms,
@@ -145,11 +145,11 @@ _NEAREST_WINDOW = 200
 
 def _metric_group(container_name: str) -> tuple[str, bool]:
     """`(group_key, is_service)` for one metric sample's display grouping —
-    cttc's `StatsSource` groups by service name (`name.split(".")[0]`),
-    merging every swarm task instance's samples into one per-service
-    timeline (a swarm task's container name has the dotted
-    `<service>.<task>.<id>` shape). A name with no dot is already its own
-    group, unchanged (an ordinary, non-swarm container).
+    groups by service name (`name.split(".")[0]`), merging every swarm
+    task instance's samples into one per-service timeline (a swarm task's
+    container name has the dotted `<service>.<task>.<id>` shape). A name
+    with no dot is already its own group, unchanged (an ordinary,
+    non-swarm container).
     """
     group = container_name.split(".", 1)[0]
     return (group, True) if group != container_name else (container_name, False)
@@ -159,14 +159,14 @@ async def point_at(
     redis: Redis, docker_host: str, kind: Kind, t: datetime, *, window: int = _NEAREST_WINDOW
 ) -> dict[str, tuple[str, LogRecord | MetricRecord, bool]]:
     """Per display group, the entry whose Stream ID timestamp is closest to
-    `t` — cttc's `/point`: compare an arbitrary instant (e.g. a loaded
+    `t` — backs `/point`: compare an arbitrary instant (e.g. a loaded
     sample) against another (e.g. live "now"), across every container/
     service visible on this daemon at once, not scoped to a single one.
 
-    `MetricRecord`s are grouped by `_metric_group` (service-merged, matching
-    cttc's `StatsSource.point_at`); any other kind falls back to grouping by
-    `container_id` (unaffected — cttc's `LogSource` never merges by
-    service). The `bool` in each result is that group's `is_service` flag.
+    `MetricRecord`s are grouped by `_metric_group` (service-merged); any
+    other kind falls back to grouping by `container_id` (unaffected —
+    logs never merge by service). The `bool` in each result is that
+    group's `is_service` flag.
     """
     target_ms = int(t.timestamp() * 1000)
     stream = stream_key(docker_host, kind)
@@ -203,11 +203,12 @@ async def index_at(
     window: int = _NEAREST_WINDOW,
 ) -> str | None:
     """The Stream ID of `container_id`'s log entry at-or-before `t`, or the
-    nearest one after if none precede it — cttc's `LogSource.index_at`.
-    There it's an integer rank into that container's own zset; here it's a
-    Stream ID cursor instead (see `find_text`'s docstring for why Stream-ID
-    addressing replaces the integer-rank scheme log-sump has no O(1) way to
-    produce over a stream shared by every container on the daemon).
+    nearest one after if none precede it. A prior gateway implementation
+    addressed the equivalent position as an integer rank into that
+    container's own zset; here it's a Stream ID cursor instead (see
+    `find_text`'s docstring for why Stream-ID addressing replaces the
+    integer-rank scheme log-sump has no O(1) way to produce over a stream
+    shared by every container on the daemon).
     """
     stream = stream_key(docker_host, Kind.LOG)
     before = await redis.xrevrange(stream, max=_id_ceiling(t), count=window) or []
@@ -237,7 +238,7 @@ async def ticks(
     px: int,
 ) -> list[int]:
     """Event-density strip: count of `container_id`'s entries per pixel
-    bucket across `[t0, t1]` — cttc's `/ticks`.
+    bucket across `[t0, t1]` — backs `/ticks`.
 
     Streams are split by `(docker_host, kind)`, not by container
     (`redis_keys.stream_key`'s own docstring explains why: container IDs
@@ -245,8 +246,9 @@ async def ticks(
     stream for the requested range and filters by `container_id`
     client-side — O(daemon's total volume in range), not O(this
     container's own volume). Accepted cost of that per-daemon layout (see
-    the migration plan's non-negotiables); cttc's own `LogSource.ticks`
-    pays no such cost only because its store keeps one zset per container.
+    the migration plan's non-negotiables) -- an implementation that keeps
+    one zset per container instead pays no such cost, at the price of that
+    per-container storage layout.
     """
     px = max(1, px)
     dt_ms = max(1.0, (t1 - t0).total_seconds() * 1000.0 / px)
@@ -294,7 +296,7 @@ async def bucketed(
     redis: Redis, docker_host: str, t0: datetime, t1: datetime, px: int
 ) -> list[BucketedContainer]:
     """Per display group, per pixel bucket: max `cpu_pct`, max `mem_pct`,
-    max net bytes/sec — cttc's `StatsSource.bucketed` (backs `/series`).
+    max net bytes/sec — backs `/series`.
 
     `MetricRecord` stores net as cumulative rx+tx counters, matching
     `docker stats`' own semantics (see `architecture.md`), so the rate is
@@ -304,10 +306,10 @@ async def bucketed(
     `container_id`, not by display group, for that first pass). Only once
     each container has its own cpu/mem/net-rate series does a second pass
     merge same-service containers together via `_metric_group` +
-    `_max_series` — cttc's own per-service max-merge, just computed at
-    query time instead of ingest time (a counter decrease, e.g. a container
-    restart, is treated the same way throughout: skipped rather than
-    yielding a negative rate).
+    `_max_series` — a per-service max-merge, computed at query time
+    instead of ingest time (a counter decrease, e.g. a container restart,
+    is treated the same way throughout: skipped rather than yielding a
+    negative rate).
     """
     px = max(1, px)
     dt_ms = max(1.0, (t1 - t0).total_seconds() * 1000.0 / px)
@@ -351,7 +353,7 @@ async def bucketed(
             if total is not None:
                 if prev_total is not None and ts_ms > prev_total[0]:
                     delta = total - prev_total[1]
-                    if delta >= 0:  # negative == counter reset (restart); skip, matches cttc
+                    if delta >= 0:  # negative == counter reset (restart); skip it
                         rate = delta / ((ts_ms - prev_total[0]) / 1000.0)
                         current_net = net[bucket] if in_range else None
                         if in_range and (current_net is None or rate > current_net):
@@ -376,9 +378,9 @@ async def bucketed(
 
 
 #: Bound on how many entries find_text scans per direction before giving up
-#: -- a full-text index is out of scope here (cttc's own LogSource.find has
-#: none either; this only adds a per-daemon-stream filter cost on top of
-#: the same linear-scan approach, see `ticks`'s docstring).
+#: -- a full-text index is out of scope here (this only adds a
+#: per-daemon-stream filter cost on top of the same linear-scan approach,
+#: see `ticks`'s docstring).
 _FIND_PAGE = 500
 _FIND_MAX_SCANNED = 5000
 
@@ -393,11 +395,11 @@ async def find_text(
     forward: bool = True,
 ) -> str | None:
     """Case-insensitive substring search over `container_id`'s log entries,
-    wrapping around once the search direction runs off the end — cttc's
-    `LogSource.find`, addressed by Stream ID cursor instead of an integer
-    row index: log-sump has no O(1) per-container rank to resume from (its
-    streams are shared by every container on the daemon), and a Stream ID
-    cursor matches the pagination idiom `/records` already uses.
+    wrapping around once the search direction runs off the end --
+    addressed by Stream ID cursor instead of an integer row index:
+    log-sump has no O(1) per-container rank to resume from (its streams
+    are shared by every container on the daemon), and a Stream ID cursor
+    matches the pagination idiom `/records` already uses.
     """
     stream = stream_key(docker_host, Kind.LOG)
     needle = query.lower()
@@ -492,9 +494,9 @@ async def latest_services(
     redis: Redis, docker_host: str, *, window: int = _LATEST_SERVICES_WINDOW
 ) -> list[ServiceRecord]:
     """The most recent `services-listing` cycle's records for `docker_host`
-    — cttc's `docker_ps`'s "services" list (`docker service ls`), used by
-    the Set Sources picker to offer a whole swarm service, not just one
-    task/container, as a collection target.
+    — the `docker service ls`-equivalent "services" list, for a client to
+    offer a whole swarm service, not just one task/container, as a
+    collection target.
 
     Every service from one listing cycle ships with that cycle's own `ts`
     (see `ServiceRecord`'s docstring), and entries come back newest-first —
@@ -537,7 +539,7 @@ async def export_window(
     redis: Redis, docker_host: str, t0: datetime, t1: datetime
 ) -> WindowExport:
     """Every log/metric record for `docker_host` in `[t0, t1]`, at full
-    resolution and shaped for `cttc_archive.write_archive` -- the
+    resolution and shaped for `sample_archive.write_archive` -- the
     recording-sessions/rolling-buffers counterpart to `bucketed` (which
     downsamples to `px` pixel buckets for chart rendering instead of
     keeping every raw sample). Migration plan Phase 4.

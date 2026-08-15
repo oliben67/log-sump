@@ -60,11 +60,10 @@ class MetricRecord(RecordBase):
 
 
 class ServiceRecord(BaseModel):
-    """One swarm service, from one `docker service ls` listing cycle
-    (cttc's `docker_ps`'s "services" list, used by the Set Sources picker to
-    offer a whole service -- not one task/container -- as a collection
-    target). Not a `RecordBase`: a service isn't a container, so it carries
-    no `container_name`/`container_id`. Every service from the same listing
+    """One swarm service, from one `docker service ls` listing cycle -- for
+    a client to offer a whole service, not one task/container, as a
+    collection target. Not a `RecordBase`: a service isn't a container, so
+    it carries no `container_name`/`container_id`. Every service from the same listing
     cycle shares that cycle's own `ts`, which `queries.latest_services`
     relies on to find "the current listing" without a separate snapshot key.
     """

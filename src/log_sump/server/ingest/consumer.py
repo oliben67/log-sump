@@ -60,15 +60,14 @@ async def run_consumer(
     is applied to every incoming `LogRecord` immediately before this
     consumer's own validate-then-`XADD` step -- see `transforms.
     apply_transforms`'s docstring. Never applied to `MetricRecord`/
-    `ServiceRecord`, matching cttc's own transform system (`LogSource`
-    only, never `StatsSource`).
+    `ServiceRecord`: log records only, never stats.
 
     `broadcaster` (migration plan Phase 6, `broadcast.py`), if given,
     publishes one `{"type": "update", "docker_host": ...}` SSE notification
     per distinct `docker_host` that received at least one record in a
-    successfully-written batch -- cttc's own `broadcast({"type": "update",
-    "source": ...})`, at daemon granularity (log-sump's own addressing
-    unit throughout this migration) rather than per opened source.
+    successfully-written batch -- a "something changed" notification at
+    daemon granularity (log-sump's own addressing unit throughout this
+    migration) rather than per opened source.
     """
     while True:
         try:
