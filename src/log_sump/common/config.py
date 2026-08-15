@@ -32,6 +32,19 @@ class DaemonConfig(BaseModel):
     transport: Literal["ssh", "local"] = "ssh"
     ssh_options: list[str] = Field(default_factory=list)
     enabled: bool = True
+    #: Selective collection (migration plan Phase 9's "Set Sources" gap):
+    #: `None` (default) watches every container on this daemon, matching
+    #: every prior phase's behavior unchanged. A list restricts log
+    #: tailing (`listener/app.py`'s new-container dispatcher) and
+    #: per-container stats sampling (`container_stats.py`) to containers
+    #: whose name is in it -- an empty list is a valid, different state
+    #: from `None`: "registered, watching nothing yet," e.g. right after a
+    #: client adds a daemon before picking any containers. Matches cttc's
+    #: own `docker://<host>/container/<name>` addressing, which was always
+    #: by name, not id. Swarm *services* aren't covered by this (log-sump
+    #: has no per-service log tailing at all yet, unlike cttc's own
+    #: ttype: "service" sources -- services_listing.py is discovery-only).
+    watched_containers: list[str] | None = None
 
 
 class ListenerConfig(BaseModel):

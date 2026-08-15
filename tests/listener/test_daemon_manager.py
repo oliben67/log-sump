@@ -59,6 +59,18 @@ async def test_daemon_manager_spawn_is_idempotent() -> None:
     await manager.stop("daemon-a")
 
 
+async def test_current_config_reflects_the_last_spawned_config() -> None:
+    manager = DaemonManager(_settings(), FakeRecordsLogger())
+    assert manager.current_config("daemon-a") is None  # never spawned
+
+    daemon = DaemonConfig(id="daemon-a", host="10.0.0.1", transport="local")
+    await manager.spawn(daemon)
+    assert manager.current_config("daemon-a") == daemon
+
+    await manager.stop("daemon-a")
+    assert manager.current_config("daemon-a") is None  # cleared on stop
+
+
 async def _settle() -> None:
     await asyncio.sleep(0.05)
 
@@ -102,6 +114,35 @@ async def test_registry_watch_stops_unregistered_daemon() -> None:
         assert manager.active_daemon_ids() == set()
     finally:
         watch_task.cancel()
+
+
+async def test_registry_watch_respawns_a_daemon_whose_watched_containers_changed() -> None:
+    """Migration plan Phase 9 (selective collection): PATCH /daemons/{id}
+    rewrites the registered DaemonConfig in place (same id) -- the watch
+    loop must notice the config itself changed, not just id presence/
+    absence, and respawn to pick up the new watched_containers.
+    """
+    redis = FakeAsyncRedis()
+    daemon = DaemonConfig(id="daemon-a", host="10.0.0.1", transport="local")
+    await register_daemon(redis, daemon)
+    manager = DaemonManager(_settings(), FakeRecordsLogger())
+    watch_task = asyncio.create_task(
+        run_daemon_registry_watch(redis, manager, frozenset(), poll_interval_s=0.02)
+    )
+    try:
+        await asyncio.sleep(0.1)
+        assert manager.current_config("daemon-a") == daemon
+
+        updated = daemon.model_copy(update={"watched_containers": ["web"]})
+        await register_daemon(redis, updated)  # same id -- an upsert, like PATCH does
+        await asyncio.sleep(0.1)
+
+        assert manager.active_daemon_ids() == {"daemon-a"}  # still just the one daemon
+        assert manager.current_config("daemon-a") == updated
+    finally:
+        watch_task.cancel()
+        for daemon_id in list(manager.active_daemon_ids()):
+            await manager.stop(daemon_id)
 
 
 async def test_registry_watch_never_stops_a_yaml_seeded_daemon() -> None:

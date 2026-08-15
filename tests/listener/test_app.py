@@ -2,7 +2,12 @@ import asyncio
 
 from log_sump.common.config import DaemonConfig
 from log_sump.common.transport import LocalTransport, SSHTransport
-from log_sump.listener.app import ListenerManager, _build_new_container_dispatcher, build_transport
+from log_sump.listener.app import (
+    ListenerManager,
+    _build_new_container_dispatcher,
+    _is_watched,
+    build_transport,
+)
 from log_sump.listener.registry import ContainerRef, Registry
 
 from .conftest import FakeRecordsLogger, FakeTransport
@@ -83,7 +88,9 @@ async def test_dispatcher_routes_new_containers_to_the_correct_daemon() -> None:
     semaphore = asyncio.Semaphore(10)
     listeners_a = ListenerManager("daemon-a", FakeTransport(), FakeRecordsLogger(), semaphore)
     listeners_b = ListenerManager("daemon-b", FakeTransport(), FakeRecordsLogger(), semaphore)
-    dispatcher = _build_new_container_dispatcher({"daemon-a": listeners_a, "daemon-b": listeners_b})
+    dispatcher = _build_new_container_dispatcher(
+        {"daemon-a": listeners_a, "daemon-b": listeners_b}, {}
+    )
 
     registry = Registry()
     registry.on_new_container(dispatcher)
@@ -99,3 +106,55 @@ async def test_dispatcher_routes_new_containers_to_the_correct_daemon() -> None:
 
     await listeners_a.stop("c1")
     await listeners_b.stop("c2")
+
+
+def test_is_watched_none_watches_everything() -> None:
+    assert _is_watched("web", None) is True
+    assert _is_watched("anything-at-all", None) is True
+
+
+def test_is_watched_list_restricts_to_named_containers() -> None:
+    assert _is_watched("web", ["web", "db"]) is True
+    assert _is_watched("cache", ["web", "db"]) is False
+    assert _is_watched("web", []) is False  # empty list: watching nothing yet
+
+
+async def test_dispatcher_skips_a_container_not_in_watched_containers() -> None:
+    semaphore = asyncio.Semaphore(10)
+    listeners = ListenerManager("daemon-a", FakeTransport(), FakeRecordsLogger(), semaphore)
+    daemon_configs = {
+        "daemon-a": DaemonConfig(id="daemon-a", host="h", watched_containers=["web"])
+    }
+    dispatcher = _build_new_container_dispatcher({"daemon-a": listeners}, daemon_configs)
+
+    registry = Registry()
+    registry.on_new_container(dispatcher)
+
+    await registry.update(
+        "daemon-a",
+        {
+            ContainerRef(container_id="c1", container_name="web"),
+            ContainerRef(container_id="c2", container_name="db"),
+        },
+    )
+
+    assert listeners.active_container_ids() == {"c1"}  # only "web", not "db"
+    await listeners.stop("c1")
+
+
+async def test_dispatcher_watches_everything_when_daemon_config_is_unknown() -> None:
+    """A daemon the dispatcher has no config entry for yet (shouldn't
+    normally happen -- DaemonManager always populates it before the
+    registry can discover anything) falls back to unfiltered, matching
+    watched_containers=None's own default.
+    """
+    semaphore = asyncio.Semaphore(10)
+    listeners = ListenerManager("daemon-a", FakeTransport(), FakeRecordsLogger(), semaphore)
+    dispatcher = _build_new_container_dispatcher({"daemon-a": listeners}, {})
+
+    registry = Registry()
+    registry.on_new_container(dispatcher)
+    await registry.update("daemon-a", {ContainerRef(container_id="c1", container_name="web")})
+
+    assert listeners.active_container_ids() == {"c1"}
+    await listeners.stop("c1")

@@ -35,11 +35,14 @@ async def run_container_stats(
     records_logger: RecordsLogger,
     *,
     stats_interval_s: float,
+    watched_containers: list[str] | None = None,
 ) -> None:
     seq_counter = itertools.count(1)
     while True:
         try:
-            await _sample_once(docker_host, transport, registry, records_logger, seq_counter)
+            await _sample_once(
+                docker_host, transport, registry, records_logger, seq_counter, watched_containers
+            )
         except (TransportError, ValueError) as exc:
             await logger.awarning(
                 "container_stats.cycle_failed", docker_host=docker_host, error=str(exc)
@@ -53,6 +56,7 @@ async def _sample_once(
     registry: Registry,
     records_logger: RecordsLogger,
     seq_counter: itertools.count[int],
+    watched_containers: list[str] | None,
 ) -> None:
     result = await transport.run(["docker", "stats", "--no-stream", "--format", "{{json .}}"])
     result.check()
@@ -66,6 +70,12 @@ async def _sample_once(
         data = json.loads(line)
         if data.get("ID") not in known_ids:
             continue  # already torn down since the last containers-listing cycle
+        # Selective collection (migration plan Phase 9): None watches
+        # everything (unchanged default); a list restricts sampling to
+        # containers whose name is in it, matching the log-tailing
+        # dispatcher's identical filter (listener/app.py's _is_watched).
+        if watched_containers is not None and str(data.get("Name", "")) not in watched_containers:
+            continue
         record = _parse_stats_line(
             docker_host=docker_host, data=data, seq=next(seq_counter), ts=now
         )

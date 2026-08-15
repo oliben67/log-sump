@@ -73,6 +73,75 @@ async def test_run_container_stats_only_emits_for_registry_known_containers() ->
     assert record.container_id == "c1"
 
 
+async def test_run_container_stats_respects_watched_containers() -> None:
+    """Migration plan Phase 9 (selective collection): both containers are
+    registry-known (neither is torn down), but only "web" is watched.
+    """
+    other_row = dict(RAW_ROW, ID="c2", Name="db")
+    stdout = "\n".join([json.dumps(RAW_ROW), json.dumps(other_row)])
+    transport = FakeTransport(run_result=ExecResult(returncode=0, stdout=stdout, stderr=""))
+    registry = Registry()
+    await registry.update(
+        "daemon-a",
+        {
+            ContainerRef(container_id="c1", container_name="web"),
+            ContainerRef(container_id="c2", container_name="db"),
+        },
+    )
+    records_logger = FakeRecordsLogger()
+
+    task = asyncio.create_task(
+        run_container_stats(
+            "daemon-a",
+            transport,
+            registry,
+            records_logger,
+            stats_interval_s=10.0,
+            watched_containers=["web"],
+        )
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert len(records_logger.calls) == 1
+    record = RecordAdapter.validate_json(records_logger.calls[0])
+    assert isinstance(record, MetricRecord)
+    assert record.container_id == "c1"
+
+
+async def test_run_container_stats_watched_containers_none_watches_everything() -> None:
+    other_row = dict(RAW_ROW, ID="c2", Name="db")
+    stdout = "\n".join([json.dumps(RAW_ROW), json.dumps(other_row)])
+    transport = FakeTransport(run_result=ExecResult(returncode=0, stdout=stdout, stderr=""))
+    registry = Registry()
+    await registry.update(
+        "daemon-a",
+        {
+            ContainerRef(container_id="c1", container_name="web"),
+            ContainerRef(container_id="c2", container_name="db"),
+        },
+    )
+    records_logger = FakeRecordsLogger()
+
+    task = asyncio.create_task(
+        run_container_stats(
+            "daemon-a", transport, registry, records_logger, stats_interval_s=10.0
+        )
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert len(records_logger.calls) == 2
+
+
 async def test_run_container_stats_survives_transport_errors() -> None:
     transport = FakeTransport(raise_on_start=TransportError("unreachable"))
     registry = Registry()

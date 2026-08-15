@@ -27,6 +27,10 @@ class CatalogEntry(BaseModel):
     id: str
     host: str
     enabled: bool
+    #: Selective collection (migration plan Phase 9): `None` means every
+    #: container on this daemon is watched; a list is the exact set. See
+    #: `DaemonConfig.watched_containers`'s own docstring.
+    watched_containers: list[str] | None = None
 
 
 @router.get("/catalog")
@@ -39,7 +43,12 @@ async def get_catalog(
     for daemon in await list_registered_daemons(redis):
         by_id.setdefault(daemon.id, daemon)  # YAML wins on a (rare) id collision
     return [
-        CatalogEntry(id=daemon.id, host=daemon.host, enabled=daemon.enabled)
+        CatalogEntry(
+            id=daemon.id,
+            host=daemon.host,
+            enabled=daemon.enabled,
+            watched_containers=daemon.watched_containers,
+        )
         for daemon in by_id.values()
         if daemon.id in permitted
     ]

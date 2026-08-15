@@ -1,6 +1,8 @@
-"""POST /daemons, DELETE /daemons/{id} -- migration plan Phase 3. Confirms
-a registered daemon is immediately visible in /catalog to the key that
-registered it (the auto-provisioning pattern also used by file upload).
+"""POST /daemons, PATCH /daemons/{id}, DELETE /daemons/{id} -- migration
+plan Phase 3 (registration) and Phase 9 (PATCH, selective collection).
+Confirms a registered daemon is immediately visible in /catalog to the key
+that registered it (the auto-provisioning pattern also used by file
+upload).
 """
 
 import asyncio
@@ -54,7 +56,12 @@ async def test_create_daemon_and_it_appears_in_catalog(
         headers=_auth_headers(),
     )
     assert resp.status_code == 200
-    assert resp.json() == {"id": "prod-a", "host": "10.0.0.5", "enabled": True}
+    assert resp.json() == {
+        "id": "prod-a",
+        "host": "10.0.0.5",
+        "enabled": True,
+        "watched_containers": None,
+    }
 
     registered = await list_registered_daemons(redis)
     assert len(registered) == 1
@@ -63,6 +70,92 @@ async def test_create_daemon_and_it_appears_in_catalog(
     catalog_resp = await client.get("/catalog", headers=_auth_headers())
     assert catalog_resp.status_code == 200
     assert {e["id"] for e in catalog_resp.json()} == {"prod-a"}
+
+
+async def test_update_daemon_sets_watched_containers(
+    client: AsyncClient, redis: FakeAsyncRedis
+) -> None:
+    await client.post(
+        "/daemons", json={"id": "prod-a", "host": "10.0.0.5"}, headers=_auth_headers()
+    )
+
+    resp = await client.patch(
+        "/daemons/prod-a", json={"watched_containers": ["web", "db"]}, headers=_auth_headers()
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "id": "prod-a",
+        "host": "10.0.0.5",
+        "enabled": True,
+        "watched_containers": ["web", "db"],
+    }
+    registered = {d.id: d for d in await list_registered_daemons(redis)}
+    assert registered["prod-a"].watched_containers == ["web", "db"]
+    # host/user/transport survive an update that only touches watched_containers
+    assert registered["prod-a"].host == "10.0.0.5"
+
+
+async def test_update_daemon_back_to_null_watches_everything_again(
+    client: AsyncClient, redis: FakeAsyncRedis
+) -> None:
+    await client.post(
+        "/daemons",
+        json={"id": "prod-a", "host": "10.0.0.5", "watched_containers": ["web"]},
+        headers=_auth_headers(),
+    )
+
+    resp = await client.patch(
+        "/daemons/prod-a", json={"watched_containers": None}, headers=_auth_headers()
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["watched_containers"] is None
+    registered = {d.id: d for d in await list_registered_daemons(redis)}
+    assert registered["prod-a"].watched_containers is None
+
+
+async def test_update_unknown_daemon_returns_404(client: AsyncClient) -> None:
+    resp = await client.patch(
+        "/daemons/nonexistent", json={"watched_containers": ["web"]}, headers=_auth_headers()
+    )
+    assert resp.status_code == 404
+
+
+async def test_update_yaml_seeded_daemon_returns_404(redis: FakeAsyncRedis) -> None:
+    settings = Settings(daemons=[DaemonConfig(id="yaml-daemon", host="10.0.0.9")])
+    app = create_app(settings=settings, redis=redis)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.patch(
+                "/daemons/yaml-daemon",
+                json={"watched_containers": ["web"]},
+                headers=_auth_headers(),
+            )
+    assert resp.status_code == 404
+
+
+async def test_update_daemon_requires_api_key(client: AsyncClient) -> None:
+    resp = await client.patch("/daemons/prod-a", json={"watched_containers": ["web"]})
+    assert resp.status_code == 401
+
+
+async def test_update_daemon_publishes_a_catalog_sse_event(redis: FakeAsyncRedis) -> None:
+    app = create_app(settings=Settings(), redis=redis)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            await ac.post(
+                "/daemons", json={"id": "prod-a", "host": "10.0.0.5"}, headers=_auth_headers()
+            )
+            queue = app.state.broadcaster.subscribe()  # subscribe after create's own event
+            resp = await ac.patch(
+                "/daemons/prod-a", json={"watched_containers": ["web"]}, headers=_auth_headers()
+            )
+        assert resp.status_code == 200
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event == {"type": "catalog"}
 
 
 async def test_delete_registered_daemon(client: AsyncClient) -> None:

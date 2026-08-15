@@ -166,6 +166,7 @@ async def run_daemon(
                 registry,
                 records_logger,
                 stats_interval_s=settings.listener.stats_interval_s,
+                watched_containers=daemon.watched_containers,
             )
         )
         if settings.metrics.system_enabled:
@@ -187,8 +188,13 @@ async def run_daemon(
     await asyncio.gather(*tasks)
 
 
+def _is_watched(container_name: str, watched_containers: list[str] | None) -> bool:
+    return watched_containers is None or container_name in watched_containers
+
+
 def _build_new_container_dispatcher(
     listeners_by_daemon: dict[str, ListenerManager],
+    daemon_configs: dict[str, DaemonConfig],
 ) -> Callable[[str, ContainerRef], Awaitable[None]]:
     """One dispatcher shared by every daemon, routing by `docker_host`.
 
@@ -196,9 +202,21 @@ def _build_new_container_dispatcher(
     must be the *only* place `registry.on_new_container` is called — wiring
     it separately per daemon would let the last daemon silently clobber
     every other daemon's spawn routing.
+
+    `daemon_configs` is read live (looked up by key at call time, same as
+    `listeners_by_daemon`), not captured once -- `watched_containers`
+    (selective collection, migration plan Phase 9) can change after a
+    daemon's already running (`PATCH /daemons/{id}`), and the registry
+    keeps discovering *every* container on the daemon regardless (registry.py
+    itself has no filter -- only this dispatch point decides whether a
+    discovered container actually gets a listener spawned).
     """
 
     async def on_new_container(docker_host: str, ref: ContainerRef) -> None:
+        daemon = daemon_configs.get(docker_host)
+        watched = daemon.watched_containers if daemon is not None else None
+        if not _is_watched(ref.container_name, watched):
+            return
         await listeners_by_daemon[docker_host].spawn(ref)
 
     return on_new_container
@@ -220,13 +238,22 @@ class DaemonManager:
         self._registry = Registry()
         self._spawn_semaphore = asyncio.Semaphore(settings.listener.max_concurrent_listener_spawns)
         self._listeners_by_daemon: dict[str, ListenerManager] = {}
+        self._daemon_configs: dict[str, DaemonConfig] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._registry.on_new_container(
-            _build_new_container_dispatcher(self._listeners_by_daemon)
+            _build_new_container_dispatcher(self._listeners_by_daemon, self._daemon_configs)
         )
 
     def active_daemon_ids(self) -> set[str]:
         return set(self._tasks)
+
+    def current_config(self, daemon_id: str) -> DaemonConfig | None:
+        """The `DaemonConfig` a currently-running daemon was last spawned
+        (or respawned) with -- lets a caller (`run_daemon_registry_watch`)
+        tell whether the registry's own copy has changed since, e.g. a
+        `PATCH /daemons/{id}` updating `watched_containers`.
+        """
+        return self._daemon_configs.get(daemon_id)
 
     async def spawn(self, daemon: DaemonConfig) -> None:
         if daemon.id in self._tasks:
@@ -236,6 +263,7 @@ class DaemonManager:
             daemon.id, transport, self._records_logger, self._spawn_semaphore
         )
         self._listeners_by_daemon[daemon.id] = listeners
+        self._daemon_configs[daemon.id] = daemon
         coro = run_daemon(
             daemon, self._settings, self._registry, transport, listeners, self._records_logger
         )
@@ -253,6 +281,7 @@ class DaemonManager:
             if self._tasks.get(daemon_id) is task:
                 del self._tasks[daemon_id]
             self._listeners_by_daemon.pop(daemon_id, None)
+            self._daemon_configs.pop(daemon_id, None)
             if not task.cancelled() and (exc := task.exception()) is not None:
                 logger.error("daemon_manager.crashed", docker_host=daemon_id, error=str(exc))
 
@@ -261,6 +290,7 @@ class DaemonManager:
     async def stop(self, daemon_id: str) -> None:
         task = self._tasks.pop(daemon_id, None)
         self._listeners_by_daemon.pop(daemon_id, None)
+        self._daemon_configs.pop(daemon_id, None)
         if task is None:
             return
         task.cancel()
@@ -280,9 +310,17 @@ async def run_daemon_registry_watch(
     """Polls the runtime daemon registry (migration plan Phase 3,
     `daemon_registry.py`) and reconciles it against `manager`'s currently
     running daemons: spawns anything newly registered, stops anything
-    that's been removed. Never touches a daemon in `yaml_daemon_ids` --
-    those are config's own responsibility (a restart, not this loop, is
-    what removes one), even if it's absent from the registry (it was never
+    that's been removed, and *respawns* anything whose registered config no
+    longer matches what it was last spawned with -- e.g. `watched_containers`
+    (migration plan Phase 9's selective collection) updated via `PATCH
+    /daemons/{id}` after the daemon was already running. A full stop+spawn,
+    not a live in-place filter update: it reuses the exact machinery an
+    ordinary add/remove already exercises, at the cost of a brief collection
+    gap even for containers whose watched status didn't change -- log-sump's
+    Streams aren't affected either way, so nothing is lost, just delayed a
+    cycle. Never touches a daemon in `yaml_daemon_ids` -- those are config's
+    own responsibility (a restart, not this loop, is what removes or
+    changes one), even if it's absent from the registry (it was never
     supposed to be there in the first place).
     """
     while True:
@@ -294,6 +332,9 @@ async def run_daemon_registry_watch(
             registered_by_id = {d.id: d for d in registered if d.enabled}
             for daemon_id, daemon in registered_by_id.items():
                 if daemon_id not in manager.active_daemon_ids():
+                    await manager.spawn(daemon)
+                elif manager.current_config(daemon_id) != daemon:
+                    await manager.stop(daemon_id)
                     await manager.spawn(daemon)
             removable = manager.active_daemon_ids() - yaml_daemon_ids - set(registered_by_id)
             for daemon_id in removable:
