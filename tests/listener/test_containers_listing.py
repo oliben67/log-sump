@@ -22,6 +22,19 @@ async def test_list_containers_parses_json_lines() -> None:
     }
 
 
+async def test_list_containers_excludes_log_sumps_own_container() -> None:
+    output = (
+        '{"ID":"c1","Names":"web-1"}\n'
+        '{"ID":"c2","Names":"shared-log-sump-1",'
+        '"Labels":"com.docker.compose.project=shared,com.docker.compose.service=log-sump"}\n'
+    )
+    transport = FakeTransport(run_result=ExecResult(returncode=0, stdout=output, stderr=""))
+
+    refs = await _list_containers(transport)
+
+    assert refs == {ContainerRef(container_id="c1", container_name="web-1")}
+
+
 async def test_list_containers_raises_on_nonzero_exit() -> None:
     transport = FakeTransport(
         run_result=ExecResult(returncode=1, stdout="", stderr="daemon unreachable")

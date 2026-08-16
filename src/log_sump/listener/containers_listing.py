@@ -60,5 +60,23 @@ async def _list_containers(transport: Transport) -> set[ContainerRef]:
         if not line:
             continue
         data = json.loads(line)
+        if _is_log_sump_container(data):
+            continue
         refs.add(ContainerRef(container_id=data["ID"], container_name=data["Names"]))
     return refs
+
+
+def _is_log_sump_container(data: dict[str, str]) -> bool:
+    """log-sump's own deployed container is watching the very host it runs
+    on (bind-mounted `/var/run/docker.sock`), so it always shows up in its
+    own `docker ps` output alongside every real container -- it must never
+    be offered as something to watch. Matched by the compose-assigned
+    service label rather than image or name: the image ref (`log-sump:latest`
+    locally, `osteck/log-sump:<tag>` from the registry) and the container
+    name (`<compose-project>-log-sump-<n>`, project varies by deploy dir)
+    both vary across deployments; `com.docker.compose.service` does not
+    (both `releases/_shared/docker-compose.yml` and `_repo/docker-compose.yml`
+    name the service `log-sump`).
+    """
+    labels = data.get("Labels", "")
+    return "com.docker.compose.service=log-sump" in labels.split(",")
