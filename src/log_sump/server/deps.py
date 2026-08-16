@@ -76,10 +76,12 @@ async def require_valid_api_key_sse(
 ) -> None:
     """Same "any valid key is enough" check as `require_valid_api_key`, but
     also accepts the key via an `api_key` query param — the one concession
-    browsers force: a native `EventSource` (`GET /events`, `routers/
-    live.py`) can't attach a custom header at all, by spec, so the query
-    string is the only channel it has. `require_gateway_token` below has
-    the identical `?token=` fallback, for the identical reason.
+    browsers force: a native `EventSource` can't attach a custom header at
+    all, by spec, so the query string is the only channel it has.
+    `require_gateway_token` below has the identical `?token=` fallback, for
+    the identical reason. Kept as its own dependency (not folded into
+    `require_valid_api_key_or_gateway_token_sse` below) since it's still
+    the right, narrower gate for any future daemon-scoped-only SSE route.
     """
     api_key = header_key or request.query_params.get("api_key")
     if not api_key:
@@ -162,3 +164,38 @@ async def require_gateway_token(
     presented = header_token or request.query_params.get("token")
     if not backend.is_valid(presented):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or incorrect X-CTTC-Token")
+
+
+async def require_valid_api_key_or_gateway_token_sse(
+    request: Request,
+    header_key: Annotated[str | None, Security(_api_key_header)] = None,
+    header_token: Annotated[str | None, Security(_gateway_token_header)] = None,
+) -> None:
+    """Same "any valid credential is enough" gate as
+    `require_valid_api_key_sse`, but also accepts the shared gateway token
+    as an alternative to a daemon-scoped API key. `/events` (`routers/
+    live.py`) is reachable both by log-sump's own native, daemon-scoped
+    clients and by a deployment sitting a plugin-extended gateway behind a
+    single shared token instead of per-daemon keys (a gateway-token-only
+    client -- e.g. cttc's own renderer -- never holds a daemon-scoped API
+    key at all, only a gateway token; see cttc's own br-PLUG-002).
+
+    Deliberately does NOT reuse `require_gateway_token`'s own "unset token
+    means no gate at all" permissiveness here: that's the right default for
+    an admin/gateway-mesh route with no other floor, but `/events` already
+    had a strict "some valid credential required" floor before this
+    existed, via `require_valid_api_key_sse` -- a deployment that never
+    configured a gateway token at all must not silently lose that floor
+    just because this dependency also knows how to check one. Checking
+    `.configured` first, not just `.is_valid()`, is what preserves that.
+    """
+    gateway_backend: GatewayTokenAuthBackend = request.app.state.gateway_token_backend
+    presented_token = header_token or request.query_params.get("token")
+    if gateway_backend.configured and gateway_backend.is_valid(presented_token):
+        return
+    api_key = header_key or request.query_params.get("api_key")
+    if api_key:
+        auth_backend: RedisApiKeyAuthBackend = request.app.state.auth_backend
+        if await auth_backend.permitted_daemons(api_key) is not None:
+            return
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or invalid credentials")

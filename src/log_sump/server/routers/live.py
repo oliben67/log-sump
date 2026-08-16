@@ -9,9 +9,11 @@ data lands for a daemon (the ingestion consumer, a file upload);
 
 Auth: a browser's native `EventSource` can't attach a custom header at
 all, by spec -- the same problem that prior implementation's own `/events`
-had, and the same fix: an `api_key` query param is accepted here as a
-fallback alongside the header (see `require_valid_api_key_sse`'s own
-docstring in `deps.py`).
+had, and the same fix: an `api_key`/`token` query param is accepted here as
+a fallback alongside the header, for either credential (see
+`require_valid_api_key_or_gateway_token_sse`'s own docstring in
+`deps.py` -- a daemon-scoped API key or the shared gateway token, either
+one is enough).
 
 The generator itself (`sse_generator`) is a standalone function, not a
 closure inside the route handler, specifically so it can be tested
@@ -33,7 +35,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from ..broadcast import KEEPALIVE_INTERVAL_SECONDS, Broadcaster
-from ..deps import get_broadcaster, require_valid_api_key_sse
+from ..deps import get_broadcaster, require_valid_api_key_or_gateway_token_sse
 
 router = APIRouter()
 
@@ -64,7 +66,7 @@ async def sse_generator(
             yield b": keepalive\n\n"
 
 
-@router.get("/events", dependencies=[Depends(require_valid_api_key_sse)])
+@router.get("/events", dependencies=[Depends(require_valid_api_key_or_gateway_token_sse)])
 async def sse_events(
     request: Request, broadcaster: Annotated[Broadcaster, Depends(get_broadcaster)]
 ) -> StreamingResponse:
