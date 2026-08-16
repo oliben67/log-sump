@@ -150,18 +150,6 @@ class TransformsConfig(BaseModel):
     active: list[str] = Field(default_factory=list)
 
 
-class PluginsConfig(BaseModel):
-    """Optional router plugins -- log-sump's generic extension point for
-    whatever a particular deployment needs beyond the built-in API surface.
-    `directory` unset (the default) disables plugin loading entirely: no
-    directory to scan, nothing mounted. See
-    `log_sump.server.plugins`' own module docstring for the plugin
-    contract itself.
-    """
-
-    directory: str | None = None
-
-
 class GatewayConfig(BaseModel):
     """Gateway-mesh + admin-auth tunables (migration plan Phase 7). Plain
     `Settings` fields, under the standard `LOG_SUMP_GATEWAY__*` env var
@@ -202,7 +190,6 @@ class Settings(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     transforms: TransformsConfig = Field(default_factory=TransformsConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
-    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
 
     model_config = SettingsConfigDict(
         env_prefix="LOG_SUMP_",

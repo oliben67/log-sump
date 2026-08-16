@@ -230,39 +230,37 @@ Two tiers, both backed by the same Redis-stored API-key mapping
   credential tier, which would add provisioning overhead without changing
   what a compromised key could actually do here.
 
-## Plugin loading
+## Extension model
 
-`log-server` can mount extra `APIRouter`s at startup without any code in
-this repo knowing about them ahead of time — `log_sump.server.plugins`,
-driven by `Settings.plugins.directory` (unset by default: no plugin
-loading at all). When set, `create_app()` scans that directory's immediate
-subdirectories for one exposing `router: APIRouter` (a `__init__.py` doing
-`from .routes import router` or equivalent) and `app.include_router()`s
-each one found — deployment mounts plugin code by bind-mounting a
-directory into the container and pointing `LOG_SUMP_PLUGINS__DIRECTORY` at
-it, with no image rebuild needed per plugin (see
-`app/log-sump-plugin`/`app/lib/server-provision.js` in the `cttc` repo for
-the reference consumer of this mechanism).
+`create_app(settings, redis=None, extra_routers=None)` can mount extra
+`APIRouter`s at construction time without any code in this repo knowing
+what they are ahead of time — `extra_routers` is a plain list an external
+project builds itself and passes in explicitly. log-sump has zero
+knowledge of any specific caller: no runtime directory scan, no dynamic
+import, no plugin registry. A deployment that needs routes beyond the
+built-in API surface installs `log-sump` as a dependency, builds its own
+`APIRouter`s, and calls `create_app(settings, extra_routers=[...])`
+itself as part of its own entrypoint (see `log-sump-extended`, the
+reference consumer of this seam, for cttc's own legacy-compat routes).
 
-Two things `create_app()` enforces regardless of what a plugin does:
+The one thing `create_app()` still enforces regardless of what an extra
+router contains: **an extra route can only ever add routes, never change
+or shadow a built-in one.** Before mounting, every candidate router's
+`(path, method)` pairs are diffed against everything already registered
+(built-ins, and any extra router already accepted earlier in the same
+`extra_routers` list); on any overlap the whole router is rejected
+outright (logged, not fatal) rather than allowed to silently make an
+existing route unreachable — FastAPI/Starlette itself has no such guard
+on its own, resolving same-path routes in plain registration order.
 
-- **A plugin route can only ever add routes, never change or shadow a
-  built-in one.** Before mounting, every candidate plugin router's
-  `(path, method)` pairs are diffed against everything already
-  registered (built-ins, and any plugin already accepted in the same
-  load); on any overlap the whole plugin is rejected outright (logged,
-  not fatal) rather than allowed to silently make an existing route
-  unreachable — FastAPI/Starlette itself has no such guard on its own,
-  resolving same-path routes in plain registration order.
-- **A reload never carries over a plugin's own module state.** Loading a
-  plugin dynamically imports its package; before every load (including a
-  second `create_app()` call in the same process, e.g. across a test
-  suite), the plugin's entire `sys.modules` subtree is purged first, so a
-  stateful plugin module-level global never survives what looks like a
-  fresh load.
-
-A plugin failing to import, or failing the collision check above, is
-logged and skipped — never fatal to `log-server`'s own startup.
+Prior to 2026-08-16 this was a runtime plugin-loading mechanism instead
+(`log_sump.server.plugins`, driven by `Settings.plugins.directory`,
+scanning a bind-mounted directory and dynamically importing whatever it
+found there). Removed in favor of explicit, code-level composition —
+simpler to reason about, no dynamic-import/`sys.modules` state-leak
+edge cases to guard against, and a deployment's extension code is now a
+real, versioned, testable dependency rather than files dropped in a
+directory at deploy time.
 
 ## Packaging & supervision
 

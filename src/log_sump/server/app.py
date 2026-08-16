@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import structlog
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 from redis.asyncio import Redis
 
@@ -28,7 +28,6 @@ from .buffers import BufferManager
 from .events import EventManager
 from .ingest.consumer import POLL_TIMEOUT_S, run_consumer
 from .ingest.trimmer import run_trimmer
-from .plugins import load_plugin_routers
 from .routers import admin, catalog, daemons, files, gateway, health, records, series
 from .routers import buffers as buffers_router
 from .routers import events as events_router
@@ -77,13 +76,29 @@ async def run_events_tick_loop(events: EventManager, *, interval_seconds: float)
         await asyncio.sleep(interval_seconds)
 
 
-def create_app(settings: Settings | None = None, redis: Redis | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    redis: Redis | None = None,
+    extra_routers: list[APIRouter] | None = None,
+) -> FastAPI:
     """Build the app. `redis`, if given, is used as-is instead of building
     one from `settings.redis.url` — the seam that lets tests inject a
     `fakeredis.FakeAsyncRedis()` instead of needing a real connection. In
     that case ownership stays with the caller: this app won't close it on
     shutdown, matching how `Transport` is injected elsewhere in this
     project rather than constructed internally by whatever uses it.
+
+    `extra_routers` is log-sump's extension seam for a deployment that
+    needs routes beyond the built-in API surface: an external project
+    (e.g. log-sump-extended) builds its own `APIRouter`s and passes them
+    in explicitly at construction, rather than log-sump discovering and
+    importing anything itself. log-sump has no idea what routes it's
+    carrying beyond its own -- no runtime directory scan, no dynamic
+    import, no knowledge of any specific caller. Each router is
+    additive-only: one that collides with a built-in (or an earlier extra
+    router's) route at the same `(path, method)` is rejected whole rather
+    than silently shadowing it (confirmed the hard way once already --
+    see the collision-check below).
     """
     settings = settings or load_settings()
     owns_redis = redis is None
@@ -174,40 +189,39 @@ def create_app(settings: Settings | None = None, redis: Redis | None = None) -> 
     app.include_router(transforms_router.router)
     app.include_router(live_router.router)
     app.include_router(gateway.router)
-    if settings.plugins.directory:
-        # A plugin is additive-only: it must never be able to make one of
-        # log-sump's own advertised routes unreachable just by declaring a
-        # route at the same (path, method) -- FastAPI resolves overlapping
-        # routes in registration order, so a same-path plugin route
-        # registered after the built-in ones above would otherwise shadow
-        # them silently (confirmed the hard way: a plugin reproducing a
-        # legacy client's own `/point`/`/index_at`/`/ticks`/`/series`/
-        # `/logs/find` paths -- names log-sump's own Phase-1 `series`
-        # router already used first -- made those built-in routes
-        # unreachable until this check caught it). A colliding plugin is
-        # rejected whole (not partially mounted), same tolerance as an
-        # unloadable one below.
+    if extra_routers:
+        # An extra router is additive-only: it must never be able to make
+        # one of log-sump's own advertised routes unreachable just by
+        # declaring a route at the same (path, method) -- FastAPI resolves
+        # overlapping routes in registration order, so a same-path extra
+        # route registered after the built-in ones above would otherwise
+        # shadow them silently (confirmed the hard way, back when this was
+        # still a runtime-loaded plugin: one reproducing a legacy client's
+        # own `/point`/`/index_at`/`/ticks`/`/series`/`/logs/find` paths --
+        # names log-sump's own Phase-1 `series` router already used first
+        # -- made those built-in routes unreachable until this check
+        # caught it). A colliding router is rejected whole (not partially
+        # mounted), and checked against every router mounted before it
+        # (built-in or extra), not just the built-ins.
         known_routes = {
             (route.path, method)
             for route in app.routes
             if isinstance(route, APIRoute)
             for method in route.methods or ()
         }
-        for name, plugin_router in load_plugin_routers(Path(settings.plugins.directory)):
-            plugin_routes = {
+        for extra_router in extra_routers:
+            extra_routes = {
                 (route.path, method)
-                for route in plugin_router.routes
+                for route in extra_router.routes
                 if isinstance(route, APIRoute)
                 for method in route.methods or ()
             }
-            conflicts = plugin_routes & known_routes
+            conflicts = extra_routes & known_routes
             if conflicts:
-                logger.error(
-                    "plugins.route_conflict", plugin=name, conflicts=sorted(conflicts)
-                )
+                logger.error("extra_router.route_conflict", conflicts=sorted(conflicts))
                 continue
-            app.include_router(plugin_router)
-            known_routes |= plugin_routes
+            app.include_router(extra_router)
+            known_routes |= extra_routes
     return app
 
 
