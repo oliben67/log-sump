@@ -75,7 +75,7 @@ async def update_daemon(
     """Updates an already-registered daemon's `watched_containers` --
     "Set Sources" ticking/unticking specific containers over time, without
     re-registering the whole daemon (which would mean resupplying host/
-    user/transport/ssh_options every time just to change a selection).
+    user/transport/port every time just to change a selection).
     `log-listener`'s own `run_daemon_registry_watch` polls this same
     registry and respawns the daemon's tasks once it notices the config
     changed -- not instant, bounded by

@@ -14,6 +14,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.9",  # required by FastAPI's UploadFile (POST /files/upload)
     "croniter>=6.0",  # scheduling.py (Phase 4) -- same cron library a prior gateway impl used
+    "paramiko>=3.5",  # common/transport.py's SSHTransport -- a pure-Python ssh client, no ssh binary needed
 ]
 
 [dependency-groups]

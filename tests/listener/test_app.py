@@ -19,10 +19,12 @@ def test_build_transport_local() -> None:
 
 
 def test_build_transport_ssh() -> None:
-    daemon = DaemonConfig(id="prod", host="10.0.0.5", user="deploy", transport="ssh")
+    daemon = DaemonConfig(id="prod", host="10.0.0.5", user="deploy", transport="ssh", port=2222)
     transport = build_transport(daemon)
     assert isinstance(transport, SSHTransport)
-    assert transport.command_prefix() == ["ssh", "deploy@10.0.0.5"]
+    assert transport._host == "10.0.0.5"
+    assert transport._user == "deploy"
+    assert transport._port == 2222
 
 
 async def test_spawn_tracks_active_container_and_stop_removes_it() -> None:

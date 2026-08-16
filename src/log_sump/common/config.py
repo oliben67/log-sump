@@ -30,7 +30,12 @@ class DaemonConfig(BaseModel):
     host: str
     user: str = "root"
     transport: Literal["ssh", "local"] = "ssh"
-    ssh_options: list[str] = Field(default_factory=list)
+    #: `SSHTransport`'s port (paramiko, not the system `ssh` binary -- see
+    #: common/transport.py's module docstring). Was a free-form
+    #: `ssh_options: list[str]` CLI-flag passthrough until 2026-08-16;
+    #: paramiko takes structured connect() kwargs, not raw flags, so this
+    #: narrowed to the one thing that passthrough was actually used for.
+    port: int = 22
     enabled: bool = True
     #: Selective collection (migration plan Phase 9's "Set Sources" gap):
     #: `None` (default) watches every container on this daemon, matching

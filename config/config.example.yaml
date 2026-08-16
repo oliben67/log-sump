@@ -7,7 +7,7 @@ daemons:
     host: 10.0.0.5
     user: deploy
     transport: ssh
-    # ssh_options: ["-o", "StrictHostKeyChecking=accept-new"]
+    # port: 2222
     enabled: true
 
 listener:

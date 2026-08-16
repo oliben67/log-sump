@@ -42,7 +42,7 @@ logger = structlog.get_logger(__name__)
 def build_transport(daemon: DaemonConfig) -> Transport:
     if daemon.transport == "local":
         return LocalTransport()
-    return SSHTransport(host=daemon.host, user=daemon.user, ssh_options=daemon.ssh_options)
+    return SSHTransport(host=daemon.host, user=daemon.user, port=daemon.port)
 
 
 class ListenerManager:
