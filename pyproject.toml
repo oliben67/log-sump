@@ -1,6 +1,6 @@
 [project]
 name = "log-sump"
-version = "0.4.0"
+version = "0.4.1"
 description = "Async Docker-daemon log/metric collection, query API, and daemon catalog server"
 requires-python = ">=3.12"
 dependencies = [
