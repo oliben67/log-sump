@@ -59,6 +59,29 @@ async def test_daemon_manager_spawn_is_idempotent() -> None:
     await manager.stop("daemon-a")
 
 
+async def test_stop_forgets_the_daemon_in_the_shared_registry() -> None:
+    """Without this, a container already known to the registry before this
+    daemon stopped (e.g. watched_containers narrowed it out, so it was
+    never dispatched to a listener) can never be rediscovered after a
+    respawn -- Registry.update() only fires on_new_container for a
+    container_id it hasn't seen before, and the registry is shared across
+    a daemon's whole lifetime, not recreated per spawn.
+    """
+    manager = DaemonManager(_settings(), FakeRecordsLogger())
+    daemon = DaemonConfig(id="daemon-a", host="10.0.0.1", transport="local")
+    await manager.spawn(daemon)
+
+    forgotten: list[str] = []
+    manager._registry.forget_daemon = lambda docker_host: forgotten.append(docker_host)  # type: ignore[method-assign]
+
+    await manager.stop("daemon-a")
+
+    # Called from both stop() itself and the task's done-callback (stop()
+    # cancels the task, which triggers it too) -- idempotent either way,
+    # so what matters is it happened at all, for the right daemon.
+    assert forgotten and set(forgotten) == {"daemon-a"}
+
+
 async def test_current_config_reflects_the_last_spawned_config() -> None:
     manager = DaemonManager(_settings(), FakeRecordsLogger())
     assert manager.current_config("daemon-a") is None  # never spawned

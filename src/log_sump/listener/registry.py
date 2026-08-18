@@ -85,3 +85,23 @@ class Registry:
         state = self._daemons.get(docker_host)
         if state is not None:
             state.containers.pop(container_id, None)
+
+    def forget_daemon(self, docker_host: str) -> None:
+        """Drops *all* known-container state for `docker_host` -- call this
+        whenever that daemon's own task is stopped (`DaemonManager.stop`),
+        not just when a single container's listener stops.
+
+        Without this, a still-running container that was already known
+        before the daemon stopped (e.g. `watched_containers` narrowed it
+        out, so `_build_new_container_dispatcher` declined to spawn a
+        listener for it) can never trigger `on_new_container` again after
+        a respawn -- `update()` only fires that callback for a
+        `container_id` it hasn't seen before, and this registry is shared
+        across a daemon's entire lifetime, not recreated per spawn. A
+        respawn (`run_daemon_registry_watch`, e.g. after `watched_containers`
+        widens back out) is already documented as "a full stop+spawn... at
+        the cost of a brief collection gap" -- this makes that actually
+        true, instead of silently skipping anything the registry already
+        knew about.
+        """
+        self._daemons.pop(docker_host, None)

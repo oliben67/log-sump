@@ -282,6 +282,7 @@ class DaemonManager:
                 del self._tasks[daemon_id]
             self._listeners_by_daemon.pop(daemon_id, None)
             self._daemon_configs.pop(daemon_id, None)
+            self._registry.forget_daemon(daemon_id)
             if not task.cancelled() and (exc := task.exception()) is not None:
                 logger.error("daemon_manager.crashed", docker_host=daemon_id, error=str(exc))
 
@@ -291,6 +292,13 @@ class DaemonManager:
         task = self._tasks.pop(daemon_id, None)
         self._listeners_by_daemon.pop(daemon_id, None)
         self._daemon_configs.pop(daemon_id, None)
+        # A respawn (run_daemon_registry_watch, e.g. after watched_containers
+        # widens) must re-evaluate every currently-running container against
+        # the new config -- without this, the registry's shared, per-daemon
+        # "already known" state (Registry.forget_daemon's own docstring) would
+        # silently skip re-dispatching anything discovered before this stop,
+        # regardless of what changed.
+        self._registry.forget_daemon(daemon_id)
         if task is None:
             return
         task.cancel()

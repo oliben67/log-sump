@@ -55,6 +55,49 @@ async def test_forget_removes_container_from_daemon_state() -> None:
     assert "c1" not in registry.state_for("daemon-a").containers
 
 
+async def test_forget_daemon_drops_all_known_containers_for_that_daemon_only() -> None:
+    registry = Registry()
+    web = ContainerRef(container_id="c1", container_name="web")
+    db = ContainerRef(container_id="c2", container_name="db")
+    await registry.update("daemon-a", {web})
+    await registry.update("daemon-b", {db})
+
+    registry.forget_daemon("daemon-a")
+
+    assert registry.state_for("daemon-a").containers == {}
+    assert "c2" in registry.state_for("daemon-b").containers  # untouched
+
+
+async def test_forget_daemon_lets_an_already_known_container_be_rediscovered() -> None:
+    """The actual bug this exists for: watched_containers narrows a
+    container out, then widens back out later (e.g. a fresh /docker/ps
+    discovery cycle after being reset) -- a still-running container the
+    registry already knew about must fire on_new_container again once its
+    daemon is stopped and respawned, or nothing ever re-evaluates it
+    against the new watch list.
+    """
+    registry = Registry()
+    seen: list[ContainerRef] = []
+
+    async def on_new(_docker_host: str, ref: ContainerRef) -> None:
+        seen.append(ref)
+
+    registry.on_new_container(on_new)
+    web = ContainerRef(container_id="c1", container_name="web")
+
+    await registry.update("daemon-a", {web})
+    assert seen == [web]
+
+    # Same container, no forget_daemon in between -> not reported again.
+    await registry.update("daemon-a", {web})
+    assert seen == [web]
+
+    # Daemon respawned (DaemonManager.stop's job) -> registry forgets it.
+    registry.forget_daemon("daemon-a")
+    await registry.update("daemon-a", {web})
+    assert seen == [web, web]
+
+
 def test_state_for_is_isolated_per_daemon() -> None:
     registry = Registry()
     assert registry.state_for("daemon-a") is registry.state_for("daemon-a")
