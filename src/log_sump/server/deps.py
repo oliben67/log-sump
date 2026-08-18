@@ -166,6 +166,32 @@ async def require_gateway_token(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or incorrect X-CTTC-Token")
 
 
+async def require_valid_api_key_or_gateway_token(
+    request: Request,
+    header_key: Annotated[str | None, Security(_api_key_header)] = None,
+    header_token: Annotated[str | None, Security(_gateway_token_header)] = None,
+) -> None:
+    """Plain (non-SSE) sibling of `require_valid_api_key_or_gateway_token_sse`
+    below -- same "gateway token first (if configured), else any valid
+    daemon-scoped API key" gate, minus that one's `?token=`/`?api_key=`
+    query-param fallback: a plain JSON `fetch()`-based route (unlike
+    `EventSource`, which can't attach custom headers at all) has no reason
+    to accept credentials outside a header. Use this for any built-in
+    route the renderer calls directly with only a gateway token in hand
+    (br-PLUG-002) that isn't itself an SSE stream -- `GET /transforms` is
+    the first (`BUG-0098`); `/events` already had its own SSE-flavored
+    version below before this one existed.
+    """
+    gateway_backend: GatewayTokenAuthBackend = request.app.state.gateway_token_backend
+    if gateway_backend.configured and gateway_backend.is_valid(header_token):
+        return
+    if header_key:
+        auth_backend: RedisApiKeyAuthBackend = request.app.state.auth_backend
+        if await auth_backend.permitted_daemons(header_key) is not None:
+            return
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or invalid credentials")
+
+
 async def require_valid_api_key_or_gateway_token_sse(
     request: Request,
     header_key: Annotated[str | None, Security(_api_key_header)] = None,

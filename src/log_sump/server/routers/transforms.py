@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from ..deps import require_valid_api_key
+from ..deps import require_valid_api_key_or_gateway_token
 from ..transforms import TransformRegistry
 
 router = APIRouter()
@@ -22,7 +22,7 @@ class TransformsResponse(BaseModel):
     transforms: list[TransformInfo]
 
 
-@router.get("/transforms", dependencies=[Depends(require_valid_api_key)])
+@router.get("/transforms", dependencies=[Depends(require_valid_api_key_or_gateway_token)])
 async def list_transforms(request: Request) -> TransformsResponse:
     registry: TransformRegistry | None = request.app.state.transform_registry
     if registry is None:
