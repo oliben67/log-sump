@@ -56,22 +56,31 @@ Redis client (the older `aioredis` project merged into it), with native
   (console, for local dev) and the dedicated records-shipping logger use
   `structlog.stdlib.BoundLogger`'s built-in async methods, which run the
   underlying sync call in a thread executor rather than blocking the loop.
-- **python-logstash-async** — ships each record's JSON to Logstash's TCP
-  input via a background worker thread with a persistent, on-disk SQLite
-  buffer (`database_path`), so in-flight records survive a `log-listener`
-  restart rather than being lost. This is the one place strict-async is
-  relaxed: the buffer itself is a synchronous, thread-owned queue, but
-  dispatching into it never blocks the event loop.
+- **python-logstash-async** — ships each record's JSON to the log-processing
+  stage's TCP input (still a Logstash-shaped wire protocol — see below —
+  even though Fluentd is what's actually listening on the other end) via a
+  background worker thread with a persistent, on-disk SQLite buffer
+  (`database_path`), so in-flight records survive a `log-listener` restart
+  rather than being lost. This is the one place strict-async is relaxed:
+  the buffer itself is a synchronous, thread-owned queue, but dispatching
+  into it never blocks the event loop. Unchanged by the Logstash→Fluentd
+  swap below — `log-listener`'s own wire format was explicitly out of
+  scope for that migration (see `fluentd/README.md`'s migration note).
 
 ## Log/metric transport & parsing
 
-**Logstash** — receives records over TCP (`json_lines` codec, matching
-`python-logstash-async`'s wire format), does minimal validation/tagging,
-and forwards the original record JSON — not its own enriched event — into
-Redis via the `redis` output. Installed in the container from the official
-Elastic tarball release (bundles its own JDK; no system Java needed),
-rather than the Docker image, to avoid a cross-distro binary-copy risk
-against this project's Debian-based runtime image.
+**Fluentd** — receives records over TCP (`json_lines`-shaped, matching
+`python-logstash-async`'s wire format — Fluentd's `in_tcp` with a `json`
+parser reads the same envelope Logstash's `json_lines` codec did), does the
+same validation/tagging, and forwards the original record JSON — not a
+re-serialized copy — into Redis, via a small custom output plugin
+(`fluentd/plugin/out_log_sump_redis_list.rb`; RPUSH-to-list isn't something
+any maintained `fluent-plugin-redis*` gem reproduces — see
+`fluentd/README.md`'s migration note for what was checked and why).
+Replaced **Logstash** (previously installed from the official Elastic
+tarball release to avoid a cross-distro binary-copy risk against this
+project's Debian-based runtime image) — see `fluentd/README.md`'s
+migration note for the full before/after comparison and rationale.
 
 ## Storage
 
@@ -129,10 +138,10 @@ the identical listener code against a developer's own Docker socket.
 
 - **Docker**, multi-stage build (`docker/Dockerfile`): a `uv`-based builder
   stage producing the venv, copied into a runtime stage that also carries
-  `redis-server`, `openssh-client`, and Logstash.
+  `redis-server`, `openssh-client`, and Fluentd.
 - **[s6-overlay](https://github.com/just-containers/s6-overlay)** v3 — the
   four processes are supervised with explicit start-order dependencies
-  (`redis ← logstash ← log-listener`, `redis ← log-server`) rather than a
+  (`redis ← fluentd ← log-listener`, `redis ← log-server`) rather than a
   single foreground process, per the project's explicit single-container,
   four-process requirement. Chosen over `supervisord`: proper PID-1 zombie
   reaping (relevant since `ssh`/`docker` child processes can leave orphans)

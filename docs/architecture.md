@@ -3,9 +3,9 @@
 ## Overview
 
 A `log-sump` instance is one container image running **four supervised
-processes** (`s6-overlay`): `log-listener`, `logstash`, `redis`, and
+processes** (`s6-overlay`): `log-listener`, `fluentd`, `redis`, and
 `log-server`. `log-listener` watches one or more remote Docker daemons over
-SSH and streams what it finds through Logstash into Redis; `log-server`
+SSH and streams what it finds through Fluentd into Redis; `log-server`
 turns Redis into a queryable, authenticated API.
 
 ```mermaid
@@ -25,8 +25,8 @@ flowchart TB
             SS[system-stats] --> SL
         end
 
-        SL -->|python-logstash-async, TCP, JSON lines| LS[logstash]
-        LS -->|redis output: RPUSH| RL[(logsump:ingest:v1 list)]
+        SL -->|python-logstash-async, TCP, JSON lines| LS[fluentd]
+        LS -->|out_log_sump_redis_list: RPUSH| RL[(logsump:ingest:v1 list)]
 
         subgraph server["log-server"]
             CONS[ingestion consumer] --> STREAMS
@@ -50,9 +50,9 @@ flowchart TB
 | Process | Role |
 |---|---|
 | **log-listener** | Orchestrator (Python/asyncio). Discovers containers per daemon, spawns/stops per-container listeners, tracks liveness, samples resource metrics, emits structured records. |
-| **logstash** | Transport + parse layer. Receives records from `log-listener` over TCP and forwards them into Redis. |
+| **fluentd** | Transport + parse layer. Receives records from `log-listener` over TCP and forwards them into Redis. |
 | **redis** | Store for records (Redis Streams) with configurable, per-kind retention. |
-| **log-server** | Query API for clients (Python/asyncio, FastAPI); consumes Logstash's output into Streams; runs the retention trimmer; serves the daemon catalog behind authentication. |
+| **log-server** | Query API for clients (Python/asyncio, FastAPI); consumes the ingest list into Streams; runs the retention trimmer; serves the daemon catalog behind authentication. |
 
 `log-listener` and `container-listener` are deliberately distinct names: the
 former is the whole orchestrator process, the latter is one task per
@@ -113,21 +113,22 @@ daemon. Source: `src/log_sump/listener/`.
    background thread with a persistent on-disk SQLite buffer, so
    in-flight records survive a `log-listener` restart. The message sent
    is *exactly* the record's JSON, verbatim.
-5. **Logstash** (`logstash/pipeline/log-sump.conf`) receives it over its
-   `tcp`/`json_lines` input (that's the wire format `python-logstash-async`
-   sends), validates it, and forwards the original `message` string
-   unmodified via a `redis` output (`RPUSH`) to the `logsump:ingest:v1`
-   list — not the enriched Logstash event, so nothing about Logstash's own
-   envelope fields (`@timestamp`, `host`, `level`, ...) leaks into what
-   `log-server` reads back.
+5. **Fluentd** (`fluentd/fluent.conf` + `fluentd/plugin/out_log_sump_redis_list.rb`)
+   receives it over its `tcp` source (a `json` parser reading the same
+   envelope Logstash's `json_lines` codec used to — that's the wire format
+   `python-logstash-async` sends), validates it, and forwards the original
+   `message` string unmodified via the custom output plugin's `RPUSH` to
+   the `logsump:ingest:v1` list — not a re-serialized copy, so nothing
+   about the envelope's own fields (`@timestamp`, `host`, `level`, ...)
+   leaks into what `log-server` reads back.
 6. **Ingestion** (`log_sump.server.ingest.consumer`): a background task
    inside `log-server` drains that list (`BLPOP` + batched `LPOP`),
    validates each entry against the shared `Record` schema, and `XADD`s it
    into the correct per-daemon, per-kind Redis Stream. Malformed entries
    are logged and dropped here — this is where the pipeline's "enforce
    schema, drop malformed entries" requirement is actually implemented,
-   once, in Python (Logstash's own filter only tags-and-drops on parse
-   failure; it doesn't duplicate the schema check).
+   once, in Python (the transport stage's own validation only tags-and-drops
+   on parse failure; it doesn't duplicate the schema check).
 7. **Retention** (`log_sump.server.ingest.trimmer`): a second background
    task periodically `XTRIM`s each stream down to its kind's retention
    horizon.
@@ -164,9 +165,11 @@ The record's unique ID is the Redis Stream entry ID Redis assigns on
 
 ## Redis data model
 
-- **Ingest list**: `logsump:ingest:v1` — a plain list, since Logstash's
-  `redis` output has no native `XADD` mode. Versioned so a future schema
-  change could run a new version alongside the old one.
+- **Ingest list**: `logsump:ingest:v1` — a plain list, matching the
+  transport stage's own `RPUSH`-only output (no native `XADD` mode, in
+  either Logstash's original `redis` output or the custom plugin now
+  reproducing it — see `fluentd/README.md`'s migration note). Versioned so
+  a future schema change could run a new version alongside the old one.
 - **Per-daemon, per-kind streams**: `logsump:stream:{docker_host}:log` and
   `logsump:stream:{docker_host}:metric` (`redis_keys.py`).
   - **Not per-container**: container IDs churn on every redeploy/restart, so
@@ -265,17 +268,18 @@ directory at deploy time.
 ## Packaging & supervision
 
 Single image (`docker/Dockerfile`, multi-stage: `uv`-built venv → runtime
-with `redis-server`, `openssh-client`, and Logstash's official tarball,
-which bundles its own JDK). Four processes under **s6-overlay**
-(`supervisor/s6-rc.d/`), with explicit start-order dependencies:
+with `redis-server`, `openssh-client`, and Fluentd (`gem install fluentd`,
+plus the `redis` gem for `fluentd/plugin/out_log_sump_redis_list.rb`) ).
+Four processes under **s6-overlay** (`supervisor/s6-rc.d/`), with explicit
+start-order dependencies:
 
 ```
-redis ← logstash ← log-listener
+redis ← fluentd ← log-listener
 redis ← log-server
 ```
 
 On `SIGTERM` (e.g. `docker stop`), s6-rc stops services in reverse
-dependency order — `log-server`/`log-listener` first, then `logstash`, then
+dependency order — `log-server`/`log-listener` first, then `fluentd`, then
 `redis` last — each given time to exit cleanly: `log-server`'s FastAPI
 `lifespan` cancels its background ingestion/trimmer tasks and closes its
 Redis connection; `log-listener` installs its own `SIGTERM`/`SIGINT`

@@ -1,0 +1,29 @@
+#!/command/execlineb -P
+# dependencies.d/redis only orders "redis's own process has been exec'd"
+# before this -- s6-rc has no readiness notification for a plain `longrun`
+# service (redis's own `type` here), so it does NOT mean "redis is actually
+# accepting TCP connections yet". Confirmed the hard way (back when this ran
+# logstash, same underlying race): without this wait, the very first flush
+# attempt (during the real, if short, window between redis's process
+# starting and its listener actually binding) hits ECONNREFUSED. The
+# out_log_sump_redis_list output plugin's own <buffer> (exponential backoff,
+# retry_forever) recovers from that fine either way -- confirmed directly,
+# see ../../../fluentd/README.md's migration note -- so this wait is purely
+# an optimization to skip that first, guaranteed-to-fail retry cycle, not a
+# correctness requirement the way it originally was for logstash-output-
+# redis. This window is NOT always short: confirmed empirically on a real
+# deployment (network_mode: host, a bind-mounted, already-populated
+# ${CTTC_REDIS_DATA_DIR} volume -- RDB load time scales with however much
+# history is already there, and Docker Desktop's bind-mount I/O on macOS is
+# its own added latency on top) that redis-server can take 30+ seconds to
+# print "Ready to accept connections", not the sub-5s this was first tuned
+# against. 240 tries * 0.5s = 120s ceiling; falls through to exec fluentd
+# regardless (never blocks startup forever) since a redis that's still not
+# up after 120s is a real, different failure this can't paper over anyway.
+# Logs its own progress every 10s so a slow-but-working wait doesn't read as
+# a silent hang.
+fdmove -c 2 1
+foreground {
+  sh -c "i=0; while [ $i -lt 240 ]; do redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1 && { echo \"fluentd/run: redis ready after $((i / 2))s, starting fluentd\" >&2; exit 0; }; i=$((i+1)); [ $((i % 20)) -eq 0 ] && echo \"fluentd/run: still waiting for redis ($((i / 2))s so far)...\" >&2; sleep 0.5; done; echo 'fluentd/run: redis still not accepting connections after 120s, starting anyway' >&2"
+}
+exec fluentd -c /etc/fluent/fluent.conf -p /etc/fluent/plugin

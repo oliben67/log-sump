@@ -1,6 +1,0 @@
-http.host: "127.0.0.1"
-path.data: /usr/share/logstash/data
-# Logs and metrics both arrive at low, bursty volume relative to typical
-# Logstash workloads -- a single worker keeps ordering closer to arrival
-# order and avoids over-provisioning for a co-located, single-daemon setup.
-pipeline.workers: 1

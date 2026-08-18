@@ -2,7 +2,7 @@
 
 An async service that watches one or more Docker daemons over SSH, streams
 each container's logs and resource metrics into a normalized, globally
-unique record, ships them through Logstash into Redis Streams with
+unique record, ships them through Fluentd into Redis Streams with
 configurable per-kind retention, and exposes an authenticated query API to
 clients.
 
@@ -66,7 +66,7 @@ src/log_sump/
 tests/
   common/ listener/ server/   # unit tests, mirroring src/log_sump/
   integration/          # tests that exercise a real Redis
-logstash/               # Logstash pipeline config
+fluentd/                # Fluentd config + the custom Redis-list output plugin
 supervisor/s6-rc.d/     # s6-overlay service definitions (the 4 supervised processes)
 docker/Dockerfile       # multi-stage build for the single-container image
 config/                 # config.example.yaml template (config.yaml is gitignored)

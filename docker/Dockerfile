@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Single image, four supervised processes (spec §3.2, §10): log-listener,
-# logstash, redis, log-server under s6-overlay. See supervisor/s6-rc.d for
+# fluentd, redis, log-server under s6-overlay. See supervisor/s6-rc.d for
 # the service definitions and dependency ordering.
 
 #############################################
@@ -26,7 +26,8 @@ FROM python:3.12-slim AS runtime
 
 ARG TARGETARCH
 ARG S6_OVERLAY_VERSION=3.2.3.2
-ARG LOGSTASH_VERSION=8.15.3
+ARG FLUENTD_VERSION=1.17.1
+ARG FLUENTD_REDIS_GEM_VERSION=5.3.0
 ARG DOCKER_CLI_VERSION=27.3.1
 
 RUN apt-get update \
@@ -36,6 +37,9 @@ RUN apt-get update \
         ca-certificates \
         xz-utils \
         curl \
+        ruby \
+        ruby-dev \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # docker CLI only (not the full engine -- this container never runs its own
@@ -85,26 +89,23 @@ RUN set -eux; \
     tar -C / -Jxpf /tmp/s6-overlay-arch.tar.xz; \
     rm -f /tmp/s6-overlay-*.tar.xz
 
-# --- Logstash: official tarball, not the Docker image -- bundles its own
-# JDK (no system Java needed), and downloading it directly avoids either
-# cross-distro binary-copy risk (this base is Debian; the official Logstash
-# image is Ubuntu) or the complexity of adding Elastic's apt repo/signing
-# key just for one package. ---
-RUN set -eux; \
-    case "${TARGETARCH:-amd64}" in \
-        amd64) LS_ARCH=x86_64 ;; \
-        arm64) LS_ARCH=aarch64 ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/logstash.tar.gz \
-        "https://artifacts.elastic.co/downloads/logstash/logstash-${LOGSTASH_VERSION}-linux-${LS_ARCH}.tar.gz"; \
-    mkdir -p /usr/share/logstash; \
-    tar -xzf /tmp/logstash.tar.gz -C /usr/share/logstash --strip-components=1; \
-    rm -f /tmp/logstash.tar.gz
-ENV PATH="/usr/share/logstash/bin:${PATH}"
-COPY logstash/logstash.yml /usr/share/logstash/config/logstash.yml
-COPY logstash/pipelines.yml /usr/share/logstash/config/pipelines.yml
-COPY logstash/pipeline /usr/share/logstash/pipeline
+# --- Fluentd: gem install, not the official Docker image -- this base is
+# Debian (the official fluentd image is Alpine/musl), and a plain `gem
+# install` is lighter than adding a second distro's binaries or an apt
+# repo/signing key for one package. No native-extension gems needed beyond
+# what's already pulled in (msgpack, cool.io, redis -- all pure-C-extension-
+# via-mkmf, built fine against ruby-dev/build-essential above); those two
+# packages are only needed at image-build time for that, not at runtime,
+# but aren't removed after -- this image already carries a compiler for
+# uv's own native deps, so the marginal size cost here is small next to
+# what Logstash's bundled JDK used to cost. See ../fluentd/plugin/
+# out_log_sump_redis_list.rb for why a custom output plugin, not one of
+# the existing fluent-plugin-redis gems (they don't reproduce Logstash's
+# `data_type => "list"` RPUSH behavior -- see ../fluentd/README.md). ---
+RUN gem install fluentd --no-document -v "${FLUENTD_VERSION}" \
+    && gem install redis --no-document -v "${FLUENTD_REDIS_GEM_VERSION}"
+COPY fluentd/fluent.conf /etc/fluent/fluent.conf
+COPY fluentd/plugin /etc/fluent/plugin
 
 # --- the Python venv built in stage 1 ---
 COPY --from=python-builder /build/.venv /opt/log-sump/.venv
