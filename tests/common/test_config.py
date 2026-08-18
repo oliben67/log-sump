@@ -11,7 +11,7 @@ def test_defaults_with_no_yaml_or_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert settings.daemons == []
     assert settings.retention.retention_days == 7
-    assert settings.redis.url == "redis://127.0.0.1:6379/0"
+    assert settings.redis.url == "redis://127.0.0.1:16379/0"
 
 
 def test_loads_daemons_from_yaml_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,6 +49,16 @@ def test_env_var_overrides_yaml_value(tmp_path: Path, monkeypatch: pytest.Monkey
     settings = Settings()
 
     assert settings.retention.retention_days == 30
+
+
+def test_redis_port_is_overridable_via_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(CONFIG_FILE_ENV_VAR, raising=False)
+    monkeypatch.setenv("LOG_SUMP_REDIS__PORT", "23456")
+
+    settings = Settings()
+
+    assert settings.redis.port == 23456
+    assert settings.redis.url == "redis://127.0.0.1:23456/0"
 
 
 def test_metrics_retention_days_falls_back_to_retention_days(

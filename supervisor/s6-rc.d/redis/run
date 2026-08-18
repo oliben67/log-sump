@@ -1,3 +1,23 @@
 #!/command/execlineb -P
+# Must bind to the exact same port log_sump.common.config.RedisConfig's
+# `port` field (settable via this same LOG_SUMP_REDIS__PORT env var,
+# per config.py's own LOG_SUMP_<SECTION>__<FIELD> convention) expects to
+# connect to -- overriding one without the other just breaks the
+# connection. Defaults to 16379, not Redis's own 6379, so this container's
+# internal Redis doesn't collide with a developer's own locally-running
+# Redis when this port is published to the host for inspection (see
+# ../../../docker-compose.yml).
+#
+# with-contenv (not a bare inherited environment): this service has no
+# dependencies.d entry (nothing needs to come up before it, it's the root
+# of this image's own dependency chain) -- confirmed empirically that it
+# starts before s6-overlay's own container-environment sync has always
+# finished populating /run/s6/container_environment, so `docker run -e
+# LOG_SUMP_REDIS__PORT=...` was silently lost (fell back to the default
+# every time, regardless of what was actually set). with-contenv reads
+# that directory fresh at this exact point instead of relying on
+# whatever environment this process happened to inherit at spawn time.
 fdmove -c 2 1
-exec redis-server --bind 127.0.0.1 --port 6379 --dir /data --daemonize no
+with-contenv
+importas -D 16379 PORT LOG_SUMP_REDIS__PORT
+exec redis-server --bind 127.0.0.1 --port ${PORT} --dir /data --daemonize no

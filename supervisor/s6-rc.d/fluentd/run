@@ -22,8 +22,18 @@
 # up after 120s is a real, different failure this can't paper over anyway.
 # Logs its own progress every 10s so a slow-but-working wait doesn't read as
 # a silent hang.
+#
+# with-contenv: this service's own port-guessing must match whatever redis
+# actually bound to (../redis/run, same LOG_SUMP_REDIS__PORT env var) --
+# confirmed empirically that without this, a `docker run -e
+# LOG_SUMP_REDIS__PORT=...` override was silently lost here too (this
+# service still starts early enough in the boot sequence to race
+# s6-overlay's own container-environment sync), always falling back to the
+# default regardless of what was actually set.
 fdmove -c 2 1
+with-contenv
+importas -D 16379 PORT LOG_SUMP_REDIS__PORT
 foreground {
-  sh -c "i=0; while [ $i -lt 240 ]; do redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1 && { echo \"fluentd/run: redis ready after $((i / 2))s, starting fluentd\" >&2; exit 0; }; i=$((i+1)); [ $((i % 20)) -eq 0 ] && echo \"fluentd/run: still waiting for redis ($((i / 2))s so far)...\" >&2; sleep 0.5; done; echo 'fluentd/run: redis still not accepting connections after 120s, starting anyway' >&2"
+  sh -c "i=0; while [ $i -lt 240 ]; do redis-cli -h 127.0.0.1 -p ${PORT} ping >/dev/null 2>&1 && { echo \"fluentd/run: redis ready after $((i / 2))s, starting fluentd\" >&2; exit 0; }; i=$((i+1)); [ $((i % 20)) -eq 0 ] && echo \"fluentd/run: still waiting for redis ($((i / 2))s so far)...\" >&2; sleep 0.5; done; echo 'fluentd/run: redis still not accepting connections after 120s, starting anyway' >&2"
 }
 exec fluentd -c /etc/fluent/fluent.conf -p /etc/fluent/plugin

@@ -117,7 +117,23 @@ class LogstashConfig(BaseModel):
 
 
 class RedisConfig(BaseModel):
-    url: str = "redis://127.0.0.1:6379/0"
+    host: str = "127.0.0.1"
+    #: Not Redis's own IANA-registered default (6379) -- deliberately
+    #: shifted so this container's internal Redis doesn't collide with a
+    #: developer's own locally-running Redis, or another log-sump/cttc
+    #: deployment's, when it's published to the host for redis-cli/
+    #: RedisInsight inspection (see ../../../docker-compose.yml). The
+    #: supervised `redis-server` process itself (`supervisor/s6-rc.d/
+    #: redis/run`) must bind to this same port -- overriding one without
+    #: the other just breaks the connection, so both read the identical
+    #: `LOG_SUMP_REDIS__PORT` env var (this field's own override, per the
+    #: module docstring's `LOG_SUMP_<SECTION>__<FIELD>` convention).
+    port: int = 16379
+    db: int = 0
+
+    @property
+    def url(self) -> str:
+        return f"redis://{self.host}:{self.port}/{self.db}"
 
 
 class ServerConfig(BaseModel):
