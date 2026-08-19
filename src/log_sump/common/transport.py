@@ -222,6 +222,22 @@ class SSHTransport(Transport):
         # argument rather than ["sh", "-c", script]).
         return [script]
 
+    @staticmethod
+    def _with_sudo(args: Sequence[str]) -> Sequence[str]:
+        """Prepend `sudo` to remote `docker` invocations (br-CONN-004).
+
+        The account log-listener SSHes in as often isn't in the remote
+        host's `docker` group -- unlike `LocalTransport`, which never needs
+        this (this container has no `sudo` binary at all, and already runs
+        as root against a docker.sock it owns directly). Matches the old
+        `app/server/server.py::_exec_remote_docker`'s `"sudo docker " +
+        ...` behavior, which this class's `run`/`stream_lines` regressed
+        when the SSH path was rewritten onto paramiko.
+        """
+        if args and args[0] == "docker":
+            return ["sudo", *args]
+        return args
+
     def _connect(self) -> paramiko.SSHClient:
         client = paramiko.SSHClient()
         # Trust-on-first-use: matches app/lib/server-provision.js's own
@@ -245,7 +261,7 @@ class SSHTransport(Transport):
         return client
 
     async def run(self, args: Sequence[str]) -> ExecResult:
-        command = shlex.join(args)
+        command = shlex.join(self._with_sudo(args))
         return await asyncio.to_thread(self._run_sync, command)
 
     def _run_sync(self, command: str) -> ExecResult:
@@ -271,7 +287,7 @@ class SSHTransport(Transport):
 
     @contextlib.asynccontextmanager
     async def stream_lines(self, args: Sequence[str]) -> AsyncIterator[AsyncIterator[StreamLine]]:
-        command = shlex.join(args)
+        command = shlex.join(self._with_sudo(args))
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue[StreamLine | None] = asyncio.Queue()
         stop_event = threading.Event()

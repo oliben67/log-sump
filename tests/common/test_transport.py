@@ -152,8 +152,10 @@ async def test_ssh_transport_run_connects_with_host_user_port_and_returns_output
         "timeout": 10,
     }
     # shlex-joined into one command string, quoting the value with the
-    # embedded space -- not four separate remote-shell words.
-    assert client.exec_commands == ["docker ps --format '{{json .}}'"]
+    # embedded space -- not four separate remote-shell words. `sudo` is
+    # prepended per br-CONN-004 (see test_ssh_transport_run_prepends_sudo_*
+    # below) since the ssh account often isn't in the remote docker group.
+    assert client.exec_commands == ["sudo docker ps --format '{{json .}}'"]
     assert client.closed, "the connection must not be left open after run()"
 
 
@@ -168,6 +170,39 @@ async def test_ssh_transport_run_reports_nonzero_exit_without_raising(
     assert "no such container" in result.stderr
     with pytest.raises(TransportError):
         result.check()
+
+
+def test_ssh_transport_with_sudo_prepends_sudo_only_to_docker() -> None:
+    # br-CONN-004: remote docker commands run as `sudo docker ...` -- the
+    # account log-listener SSHes in as often isn't in the target host's
+    # docker group. Non-docker commands (e.g. the /proc-reading shell
+    # script run_shell builds) are untouched, matching the old
+    # `_exec_remote_docker` helper's docker-only scope.
+    assert SSHTransport._with_sudo(["docker", "ps"]) == ["sudo", "docker", "ps"]
+    assert SSHTransport._with_sudo(["cat", "/proc/stat"]) == ["cat", "/proc/stat"]
+    assert SSHTransport._with_sudo([]) == []
+
+
+async def test_ssh_transport_run_prepends_sudo_to_docker_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeSSHClient(exec_result=(b"", b"", 0))
+    _patch_ssh_client(monkeypatch, client)
+
+    await SSHTransport(host="10.0.0.5", user="deploy").run(["docker", "logs", "c1"])
+
+    assert client.exec_commands == ["sudo docker logs c1"]
+
+
+async def test_ssh_transport_run_does_not_prepend_sudo_to_non_docker_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeSSHClient(exec_result=(b"", b"", 0))
+    _patch_ssh_client(monkeypatch, client)
+
+    await SSHTransport(host="10.0.0.5", user="deploy").run(["cat", "/proc/stat"])
+
+    assert client.exec_commands == ["cat /proc/stat"]
 
 
 async def test_ssh_transport_run_reports_connect_failure_as_a_failed_result_not_an_exception(
@@ -208,6 +243,7 @@ async def test_ssh_transport_stream_lines_yields_stdout_and_stderr(
     assert ("stdout", "out-2") in pairs
     assert ("stderr", "err-1") in pairs
     assert client.closed, "stream_lines must close the ssh connection when the block exits"
+    assert client.exec_commands == ["sudo docker logs -f c1"]
 
 
 async def test_ssh_transport_stream_lines_closes_client_on_early_exit(
